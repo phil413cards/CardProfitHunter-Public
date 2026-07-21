@@ -58,3 +58,7 @@ python -m streamlit run app.py
 The app creates local runtime state under `data/`, `.cache/`, and `output/`. These locations, database files, token caches, logs, and environment files must remain untracked. Bundled sample valuations are demonstration data and are non-actionable unless explicitly verified.
 
 There is no separate build step or package artifact for this local baseline. See `INSTALL.md` for installation troubleshooting. This source repository is shareable, but the application itself remains local-only and is not ready for hosted or multi-user deployment.
+
+## License
+
+CardProfitHunter is available under the [MIT License](LICENSE).
