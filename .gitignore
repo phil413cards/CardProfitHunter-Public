@@ -1,0 +1,36 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+.cache/
+output/*.csv
+*.pyc
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+.DS_Store
+
+# Other virtual environments
+venv/
+env/
+
+# Python and test caches
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated output and logs
+output/
+logs/
+*.log
+
+# Other OS metadata
+Thumbs.db
+Desktop.ini

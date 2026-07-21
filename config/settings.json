@@ -1,0 +1,14 @@
+{
+  "ebay_fee_pct": 0.1325,
+  "raw_flip_shipping_allowance": 6.0,
+  "psa_grading_fee": 25.0,
+  "psa_shipping_insurance_allowance": 12.0,
+  "psa_selling_shipping_allowance": 8.0,
+  "minimum_raw_flip_profit": 25.0,
+  "minimum_raw_flip_roi_pct": 20.0,
+  "minimum_psa_expected_profit": 50.0,
+  "minimum_psa_expected_roi_pct": 25.0,
+  "offer_safety_margin_pct": 0.85,
+  "raw_only": true,
+  "max_offer_market_pct": 0.9
+}
