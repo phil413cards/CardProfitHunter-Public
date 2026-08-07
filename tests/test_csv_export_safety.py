@@ -166,7 +166,7 @@ class AppCsvExportWiringTests(unittest.TestCase):
     def test_downloads_use_safe_csv_helper(self):
         expected_labels = {
             "Download Daily Buy Board CSV",
-            "Download Buy Board CSV",
+            "Download Search Results CSV",
             "Download Watchlist CSV",
         }
         checked_labels = set()
