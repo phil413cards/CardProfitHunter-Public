@@ -44,6 +44,8 @@ from input_validation import (
     validate_valuation_frame,
 )
 from profit_engine import analyze_listings
+from search_relevance import filter_search_results
+from scout_engine import run_scout_engine
 from search_workflows import (
     RunOutcome,
     build_run_outcome,
@@ -62,7 +64,21 @@ DATABASE_BACKUP_DIR = OUTPUT_DIR / "database_backups"
 DIAGNOSTIC_LOG_DIR = OUTPUT_DIR / "logs"
 VERSION_PATH = ROOT / "VERSION"
 
-st.set_page_config(page_title="Card Profit Hunter V5.1", page_icon="📈", layout="wide")
+
+def load_display_version() -> str:
+    try:
+        version = VERSION_PATH.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return "unknown"
+    return version or "unknown"
+
+
+APP_VERSION = load_display_version()
+st.set_page_config(
+    page_title=f"Card Profit Hunter V{APP_VERSION}",
+    page_icon="📈",
+    layout="wide",
+)
 logger_setup = configure_local_logger(DIAGNOSTIC_LOG_DIR)
 diagnostic_logger = logger_setup.logger
 
@@ -95,41 +111,115 @@ def metrics_block(df: pd.DataFrame) -> None:
         st.warning("No results to display.")
         return
     counts = df["recommended_action"].value_counts()
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Buy Candidates", int(counts.get("BUY_RAW_FLIP", 0) + counts.get("BUY_GRADE_PSA", 0)))
-    c2.metric("Offers", int(counts.get("OFFER", 0)))
-    c3.metric("Watch", int(counts.get("WATCH", 0)))
-    c4.metric("Pass", int(counts.get("PASS", 0)))
-    c5.metric("Listings", len(df))
+    scout_count = 0
+    if "scout_candidate" in df.columns:
+        scout_count = int(df["scout_candidate"].fillna(False).astype(bool).sum())
+    pass_count = int(counts.get("PASS", 0))
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Verified Buys", int(counts.get("BUY_RAW_FLIP", 0) + counts.get("BUY_GRADE_PSA", 0)))
+    c2.metric("Verified Offers", int(counts.get("OFFER", 0)))
+    c3.metric("Scout Candidates", scout_count)
+    c4.metric("Watch", int(counts.get("WATCH", 0)))
+    c5.metric("Financial Pass", pass_count)
+    c6.metric("Listings", len(df))
 
 
 def result_table(df: pd.DataFrame) -> None:
-    preferred = ["recommended_action", "total_score", "best_path", "best_expected_profit",
+    preferred = ["scout_recommendation", "financially_verified", "requires_comp_verification",
+                 "recommendation_basis", "scout_score", "recommended_action", "total_score",
+                 "grading_candidate", "grading_signal_score", "listing_listing_class",
+                 "parsed_year", "parsed_manufacturer", "parsed_product", "parsed_parallel",
+                 "parsed_card_number", "parsed_serial_number", "best_path", "best_expected_profit",
                  "best_expected_roi_pct", "suggested_offer", "total_price", "title",
                  "matched_card", "seller_username", "condition", "item_url", "flags"]
-    cols = [c for c in preferred if c in df.columns] + [c for c in df.columns if c not in preferred]
-    st.dataframe(df[cols], width="stretch", hide_index=True)
+    display_df = df.loc[:, ~df.columns.duplicated(keep="last")].copy()
+    cols = (
+        [column for column in preferred if column in display_df.columns]
+        + [
+            column
+            for column in display_df.columns
+            if column not in preferred
+        ]
+    )
+    st.dataframe(
+        display_df.loc[:, cols],
+        width="stretch",
+        hide_index=True,
+    )
+
+
+def select_actionable_results(
+    frame: pd.DataFrame,
+    recommendation_limit: int,
+    include_offers: bool = False,
+) -> pd.DataFrame:
+    """Return the strongest purchase recommendations from an analyzed candidate pool."""
+    if frame is None or frame.empty or "recommended_action" not in frame.columns:
+        return stable_analysis_frame(pd.DataFrame())
+
+    allowed_actions = {"BUY_GRADE_PSA", "BUY_RAW_FLIP"}
+    if include_offers:
+        allowed_actions.add("OFFER")
+
+    actionable = frame[frame["recommended_action"].isin(allowed_actions)].copy()
+    if actionable.empty:
+        return stable_analysis_frame(actionable)
+
+    action_priority = {
+        "BUY_GRADE_PSA": 3,
+        "BUY_RAW_FLIP": 2,
+        "OFFER": 1,
+    }
+    actionable["_action_priority"] = (
+        actionable["recommended_action"].map(action_priority).fillna(0)
+    )
+
+    sort_columns = ["_action_priority"]
+    for column in ("total_score", "best_expected_profit", "best_expected_roi_pct"):
+        if column in actionable.columns:
+            actionable[column] = pd.to_numeric(actionable[column], errors="coerce")
+            sort_columns.append(column)
+
+    actionable = actionable.sort_values(
+        sort_columns,
+        ascending=[False] * len(sort_columns),
+        na_position="last",
+    ).head(max(int(recommendation_limit), 1))
+
+    return stable_analysis_frame(
+        actionable.drop(columns=["_action_priority"], errors="ignore")
+    ).reset_index(drop=True)
 
 
 def show_run_outcome(label: str, outcome: RunOutcome) -> None:
+    display_label = "Search" if label == "Recommended Buy Search" else label
+
     if outcome.status == "success":
-        st.success(f"{label} completed with {outcome.result_count} results.")
+        result_noun = "result" if outcome.result_count == 1 else "results"
+        st.success(
+            f"{display_label} completed with "
+            f"{outcome.result_count} {result_noun}."
+        )
     elif outcome.status == "empty":
-        st.info(f"{label} completed successfully but returned no listings.")
+        st.info(
+            f"{display_label} completed successfully but returned no listings."
+        )
     elif outcome.status == "partial":
         st.warning(
-            f"{label} partially completed: {outcome.successful_count} succeeded, "
-            f"{outcome.failed_count} failed, and {outcome.result_count} results are current."
+            f"{display_label} partially completed: "
+            f"{outcome.successful_count} succeeded, "
+            f"{outcome.failed_count} failed, and "
+            f"{outcome.result_count} results are current."
         )
     else:
-        st.error(f"{label} failed: all attempted searches failed.")
+        st.error(f"{display_label} failed: all attempted searches failed.")
 
     st.caption(f"Completed: {outcome.completed_at}")
     if outcome.errors:
         st.warning("Search failures:\n- " + "\n- ".join(outcome.errors))
 
 
-st.title("Card Profit Hunter V5.1 Professional Edition")
+st.title(f"Card Profit Hunter V{APP_VERSION} Professional Edition")
 st.caption("Executive Dashboard • Daily Buy Board • Live eBay sourcing • Opportunity history")
 if logger_setup.warning:
     st.warning(logger_setup.warning)
@@ -214,7 +304,10 @@ with st.sidebar:
     marketplace = st.text_input("Marketplace ID", value=os.getenv("EBAY_MARKETPLACE_ID", "EBAY_US"))
     client_id = st.text_input("Client ID", value=os.getenv("EBAY_CLIENT_ID", ""))
     client_secret = st.text_input("Client Secret", value=os.getenv("EBAY_CLIENT_SECRET", ""), type="password")
-    st.success("Credentials loaded locally.") if client_id and client_secret else st.info("Add credentials in .env or enter them here.")
+    if client_id and client_secret:
+        st.success("Credentials loaded locally.")
+    else:
+        st.info("Add credentials in .env or enter them here.")
 
     st.divider(); st.header("Profit Settings")
     fields = [
@@ -325,10 +418,10 @@ with dashboard_tab:
     p1, p2 = st.columns(2)
     with p1:
         st.markdown("#### Inventory Manager")
-        st.info("Inventory and cost-basis tracking arrives in V5.2.")
+        st.info("Inventory and cost-basis tracking is planned for a future release.")
     with p2:
         st.markdown("#### PSA Pipeline")
-        st.info("Submission and grading workflow arrives in V5.3.")
+        st.info("Submission and grading workflow is planned for a future release.")
 
 with daily_tab:
     st.subheader("Daily Buy Board")
@@ -388,6 +481,7 @@ with daily_tab:
                             and float(row["max_price"]) > 0
                             else None,
                         )
+                        items = filter_search_results(items, validated_query)
                         listings = normalize_ebay_items(items)
                         scored = stable_analysis_frame(
                             analyze_listings(
@@ -496,14 +590,77 @@ with live_tab:
     options = ["New search"] + saved["name"].tolist() if not saved.empty else ["New search"]
     selected = st.selectbox("Load saved search", options)
     preset = None if selected == "New search" else saved[saved["name"] == selected].iloc[0]
-    q = st.text_input("Search query", value=str(preset["query"]) if preset is not None else "Victor Wembanyama raw rookie prizm silver -PSA -BGS -SGC")
-    c1, c2, c3, c4 = st.columns(4)
-    limit = c1.number_input("Result limit", 1, 200, int(preset["limit_count"]) if preset is not None else 50, 10)
+    q = st.text_input(
+        "Player or card search",
+        value=str(preset["query"]) if preset is not None else "Shohei Ohtani",
+    )
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    recommendation_limit = c1.number_input(
+        "Recommendations to return",
+        1,
+        100,
+        25,
+        5,
+    )
+    candidate_pool = c2.number_input(
+        "Listings to analyze",
+        25,
+        200,
+        int(preset["limit_count"]) if preset is not None else 200,
+        25,
+    )
     sorts = ["newlyListed", "endingSoonest", "price", "-price"]
-    sort = c2.selectbox("Sort", sorts, index=sorts.index(str(preset["sort_order"])) if preset is not None and str(preset["sort_order"]) in sorts else 0)
-    max_price = c3.number_input("Max price", 0.0, value=float(preset["max_price"] or 1000) if preset is not None else 1000.0, step=50.0)
-    category_ids = c4.text_input("Category IDs", value=str(preset["category_ids"] or "") if preset is not None else "")
-    search_name = st.text_input("Saved search name", value=selected if selected != "New search" else "")
+    sort = c3.selectbox(
+        "eBay sort",
+        sorts,
+        index=(
+            sorts.index(str(preset["sort_order"]))
+            if preset is not None and str(preset["sort_order"]) in sorts
+            else 0
+        ),
+    )
+    max_price = c4.number_input(
+        "Max price",
+        0.0,
+        value=float(preset["max_price"] or 1000) if preset is not None else 1000.0,
+        step=50.0,
+    )
+    category_ids = c5.text_input(
+        "Category IDs",
+        value=str(preset["category_ids"] or "") if preset is not None else "",
+    )
+    include_offers = st.checkbox(
+        "Include strong OFFER candidates",
+        value=True,
+        help="Includes listings where the current asking price is too high but a verified suggested offer may create an acceptable opportunity.",
+    )
+    include_scout_candidates = st.checkbox(
+        "Include unverified Scout candidates",
+        value=True,
+        help=(
+            "Shows promising raw cards that do not yet have an exact verified valuation. "
+            "These are discovery candidates—not confirmed BUY recommendations."
+        ),
+    )
+    minimum_scout_score = st.slider(
+        "Minimum Scout candidate score",
+        min_value=25,
+        max_value=90,
+        value=40,
+        step=5,
+        disabled=not include_scout_candidates,
+    )
+    st.caption(
+        "Verified BUY and OFFER recommendations require an exact valuation match. "
+        "Unverified Scout candidates are ranked using listing type, grading signals, "
+        "rarity, card traits, and seller data, and must be researched before purchase."
+    )
+
+    search_name = st.text_input(
+        "Saved search name",
+        value=selected if selected != "New search" else "",
+    )
     if st.button("Save / Update Search"):
         if not search_name.strip():
             st.error("Enter a saved search name.")
@@ -519,7 +676,7 @@ with live_tab:
                 save_search(
                     search_name,
                     validated_query,
-                    int(limit),
+                    int(candidate_pool),
                     sort,
                     max_price if max_price > 0 else None,
                     validated_category_ids,
@@ -532,6 +689,7 @@ with live_tab:
             "last_results",
             "live_search_outcome",
         )
+        st.session_state.pop("live_search_diagnostics", None)
         errors = []
         successful_count = 0
         empty_count = 0
@@ -565,23 +723,50 @@ with live_tab:
                 marketplace.strip() or "EBAY_US",
             )
             try:
-                with st.spinner("Searching eBay and scoring listings..."):
+                with st.spinner("Searching eBay, evaluating cards, and ranking purchase opportunities..."):
                     items = search_ebay(
                         credentials,
                         validated_query,
-                        int(limit),
+                        int(candidate_pool),
                         sort,
                         validated_category_ids,
                         max_price if max_price > 0 else None,
                     )
+                    raw_item_count = len(items)
+                    items = filter_search_results(items, validated_query)
+                    relevant_item_count = len(items)
                     listings = normalize_ebay_items(items)
+                    normalized_listing_count = len(listings)
                     results = stable_analysis_frame(
-                        analyze_listings(
+                        run_scout_engine(
                             listings,
                             card_values,
                             settings,
+                            validated_query,
+                            int(recommendation_limit),
+                            include_offers=include_offers,
+                            include_scout_candidates=include_scout_candidates,
+                            minimum_scout_score=int(minimum_scout_score),
                         )
                     )
+                    verified_count = 0
+                    scout_count = 0
+                    if not results.empty:
+                        if "financially_verified" in results.columns:
+                            verified_count = int(
+                                results["financially_verified"].fillna(False).astype(bool).sum()
+                            )
+                        if "scout_candidate" in results.columns:
+                            scout_count = int(
+                                results["scout_candidate"].fillna(False).astype(bool).sum()
+                            )
+                    st.session_state["live_search_diagnostics"] = {
+                        "raw_ebay_results": raw_item_count,
+                        "relevant_results": relevant_item_count,
+                        "normalized_listings": normalized_listing_count,
+                        "verified_recommendations": verified_count,
+                        "scout_candidates": scout_count,
+                    }
                     successful_count = 1
                     empty_count = int(results.empty)
                     saved_id = None
@@ -634,15 +819,60 @@ with live_tab:
 
     outcome = st.session_state.get("live_search_outcome")
     if isinstance(outcome, RunOutcome):
-        show_run_outcome("Live Search", outcome)
+        show_run_outcome("Recommended Buy Search", outcome)
+    diagnostics = st.session_state.get("live_search_diagnostics")
+    if isinstance(diagnostics, dict):
+        d1, d2, d3, d4, d5 = st.columns(5)
+        d1.metric("Raw eBay", diagnostics.get("raw_ebay_results", 0))
+        d2.metric("Relevant", diagnostics.get("relevant_results", 0))
+        d3.metric("Normalized", diagnostics.get("normalized_listings", 0))
+        d4.metric("Verified", diagnostics.get("verified_recommendations", 0))
+        d5.metric("Scout", diagnostics.get("scout_candidates", 0))
     results = st.session_state.get("last_results")
     if isinstance(results, pd.DataFrame) and not results.empty:
-        metrics_block(results); result_table(results)
+        metrics_block(results)
+
+        grading = results[results["recommended_action"] == "BUY_GRADE_PSA"]
+        raw_buys = results[results["recommended_action"] == "BUY_RAW_FLIP"]
+        offers = results[results["recommended_action"] == "OFFER"]
+        if "scout_candidate" in results.columns:
+            scout_candidates = results[
+                results["scout_candidate"].fillna(False).astype(bool)
+            ]
+        else:
+            scout_candidates = results.iloc[0:0]
+
+        if not grading.empty:
+            st.markdown("### Verified Buy-to-Grade Recommendations")
+            st.caption(
+                "These recommendations have an exact actionable valuation match and pass "
+                "the configured financial thresholds. Photo inspection is still required."
+            )
+            result_table(grading)
+
+        if not raw_buys.empty:
+            st.markdown("### Verified Raw Resale Buys")
+            result_table(raw_buys)
+
+        if not offers.empty:
+            st.markdown("### Verified Offer Candidates")
+            result_table(offers)
+
+        if not scout_candidates.empty:
+            st.markdown("### Unverified Scout Candidates")
+            st.warning(
+                "These are discovery candidates, not confirmed BUY recommendations. "
+                "They lack an exact verified valuation. Check recent sold comparables, "
+                "inspect front and back photos, confirm the exact card/parallel, and review "
+                "the seller's return policy before purchasing."
+            )
+            result_table(scout_candidates)
+
         try:
             st.download_button(
-                "Download Buy Board CSV",
+                "Download Search Results CSV",
                 dataframe_to_spreadsheet_safe_csv(results).encode("utf-8"),
-                "live_ebay_buy_board.csv",
+                "live_ebay_search_results.csv",
                 "text/csv",
             )
         except Exception as exc:
@@ -652,14 +882,21 @@ with live_tab:
                 exc,
                 "live_search.download.prepare",
             )
-            st.error("Live Search CSV could not be prepared. See local diagnostics.")
-        if not results.empty:
-            labels = [f"{i}: {row.get('title','')[:90]}" for i, row in results.reset_index(drop=True).iterrows()]
-            pick = st.selectbox("Add listing to watchlist", labels)
-            notes = st.text_input("Watchlist notes")
-            if st.button("Add Selected Listing"):
-                idx = int(pick.split(":", 1)[0]); add_watchlist_row(results.reset_index(drop=True).iloc[idx].to_dict(), notes)
-                st.success("Added to watchlist.")
+            st.error("Recommended Buys CSV could not be prepared. See local diagnostics.")
+
+        labels = [
+            f"{i}: {row.get('title', '')[:90]}"
+            for i, row in results.reset_index(drop=True).iterrows()
+        ]
+        pick = st.selectbox("Add listing to watchlist", labels)
+        notes = st.text_input("Watchlist notes")
+        if st.button("Add Selected Listing"):
+            idx = int(pick.split(":", 1)[0])
+            add_watchlist_row(
+                results.reset_index(drop=True).iloc[idx].to_dict(),
+                notes,
+            )
+            st.success("Added to watchlist.")
 
 with saved_tab:
     st.subheader("Saved Searches")
@@ -792,7 +1029,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-cp .env.example .env
+test -f .env || cp .env.example .env
 python -m streamlit run app.py
 ```
 The database is created automatically at `data/card_profit_hunter.db`.

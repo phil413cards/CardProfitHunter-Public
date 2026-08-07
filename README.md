@@ -1,4 +1,4 @@
-# CardProfitHunter 5.1.1
+# CardProfitHunter 5.2.3
 
 CardProfitHunter is a Python/Streamlit application for finding and evaluating sports-card listings from eBay. It normalizes Browse API results, applies conservative card-identity matching, models raw-flip and PSA-grading economics, and stores local searches and opportunity snapshots in SQLite.
 
@@ -58,6 +58,12 @@ python -m streamlit run app.py
 The app creates local runtime state under `data/`, `.cache/`, and `output/`. These locations, database files, token caches, logs, and environment files must remain untracked. Bundled sample valuations are demonstration data and are non-actionable unless explicitly verified.
 
 There is no separate build step or package artifact for this local baseline. See `INSTALL.md` for installation troubleshooting. This source repository is shareable, but the application itself remains local-only and is not ready for hosted or multi-user deployment.
+
+## Phase 1 beta
+
+- [Phase 1 Beta Guide](docs/PHASE_1_BETA_GUIDE.md)
+- [Feedback Template](docs/FEEDBACK_TEMPLATE.md)
+- [Known Limitations](docs/KNOWN_LIMITATIONS.md)
 
 ## License
 
