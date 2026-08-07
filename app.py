@@ -64,7 +64,21 @@ DATABASE_BACKUP_DIR = OUTPUT_DIR / "database_backups"
 DIAGNOSTIC_LOG_DIR = OUTPUT_DIR / "logs"
 VERSION_PATH = ROOT / "VERSION"
 
-st.set_page_config(page_title="Card Profit Hunter V5.1", page_icon="📈", layout="wide")
+
+def load_display_version() -> str:
+    try:
+        version = VERSION_PATH.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return "unknown"
+    return version or "unknown"
+
+
+APP_VERSION = load_display_version()
+st.set_page_config(
+    page_title=f"Card Profit Hunter V{APP_VERSION}",
+    page_icon="📈",
+    layout="wide",
+)
 logger_setup = configure_local_logger(DIAGNOSTIC_LOG_DIR)
 diagnostic_logger = logger_setup.logger
 
@@ -205,7 +219,7 @@ def show_run_outcome(label: str, outcome: RunOutcome) -> None:
         st.warning("Search failures:\n- " + "\n- ".join(outcome.errors))
 
 
-st.title("Card Profit Hunter V5.1 Professional Edition")
+st.title(f"Card Profit Hunter V{APP_VERSION} Professional Edition")
 st.caption("Executive Dashboard • Daily Buy Board • Live eBay sourcing • Opportunity history")
 if logger_setup.warning:
     st.warning(logger_setup.warning)
@@ -404,10 +418,10 @@ with dashboard_tab:
     p1, p2 = st.columns(2)
     with p1:
         st.markdown("#### Inventory Manager")
-        st.info("Inventory and cost-basis tracking arrives in V5.2.")
+        st.info("Inventory and cost-basis tracking is planned for a future release.")
     with p2:
         st.markdown("#### PSA Pipeline")
-        st.info("Submission and grading workflow arrives in V5.3.")
+        st.info("Submission and grading workflow is planned for a future release.")
 
 with daily_tab:
     st.subheader("Daily Buy Board")
@@ -1015,7 +1029,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-cp .env.example .env
+test -f .env || cp .env.example .env
 python -m streamlit run app.py
 ```
 The database is created automatically at `data/card_profit_hunter.db`.
