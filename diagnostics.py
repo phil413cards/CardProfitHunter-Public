@@ -10,6 +10,11 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
+from local_runtime_security import (
+    secure_optional_private_file,
+    secure_private_directory,
+)
+
 
 REDACTED = "[REDACTED]"
 LOGGER_NAME = "card_profit_hunter.diagnostics"
@@ -151,19 +156,22 @@ def configure_local_logger(log_directory: Path) -> LocalLoggerSetup:
     logger.setLevel(logging.INFO)
     logger.propagate = False
     target = Path(log_directory) / LOG_FILENAME
-
-    for handler in logger.handlers:
-        if (
-            getattr(handler, "_card_profit_diagnostics", False)
-            and isinstance(handler, logging.FileHandler)
-            and Path(handler.baseFilename) == target
-        ):
-            return LocalLoggerSetup(logger=logger, enabled=True)
-
-    _close_managed_handlers(logger)
+    handler: logging.FileHandler | None = None
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
+        secure_private_directory(target.parent)
+        secure_optional_private_file(target)
+
+        for existing_handler in logger.handlers:
+            if (
+                getattr(existing_handler, "_card_profit_diagnostics", False)
+                and isinstance(existing_handler, logging.FileHandler)
+                and Path(existing_handler.baseFilename) == target
+            ):
+                return LocalLoggerSetup(logger=logger, enabled=True)
+
+        _close_managed_handlers(logger)
         handler = logging.FileHandler(target, encoding="utf-8")
+        secure_optional_private_file(target)
         handler._card_profit_diagnostics = True
         formatter = logging.Formatter(
             "%(asctime)sZ level=%(levelname)s %(message)s",
@@ -173,6 +181,8 @@ def configure_local_logger(log_directory: Path) -> LocalLoggerSetup:
         handler.setFormatter(formatter)
         logger.addHandler(handler)
     except Exception:
+        if handler is not None and handler not in logger.handlers:
+            handler.close()
         _close_managed_handlers(logger)
         null_handler = logging.NullHandler()
         null_handler._card_profit_diagnostics = True

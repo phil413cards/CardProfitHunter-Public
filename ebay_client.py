@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import math
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -43,7 +45,7 @@ NORMALIZED_EBAY_COLUMNS = (
 class EbayCredentials:
     client_id: str
     client_secret: str
-    environment: str = "production"
+    environment: str = "sandbox"
     marketplace_id: str = "EBAY_US"
 
 
@@ -78,8 +80,17 @@ def _read_cached_token(environment: str, client_id: str) -> Optional[str]:
         return None
 
     try:
+        if CACHE_DIR.is_symlink() or TOKEN_CACHE.is_symlink():
+            return None
+        if not CACHE_DIR.is_dir() or not TOKEN_CACHE.is_file():
+            return None
+        CACHE_DIR.chmod(0o700)
+        TOKEN_CACHE.chmod(0o600)
         data = json.loads(TOKEN_CACHE.read_text(encoding="utf-8"))
     except Exception:
+        return None
+
+    if not isinstance(data, dict):
         return None
 
     if data.get("environment") != environment or data.get("client_id") != client_id:
@@ -92,18 +103,56 @@ def _read_cached_token(environment: str, client_id: str) -> Optional[str]:
     if expires_at <= time.time() + 60:
         return None
 
-    return data.get("access_token")
+    token = data.get("access_token")
+    if not isinstance(token, str) or not token.strip():
+        return None
+    return token
+
+
+def _secure_cache_directory() -> None:
+    try:
+        CACHE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if CACHE_DIR.is_symlink() or not CACHE_DIR.is_dir():
+            raise OSError("unsafe cache directory")
+        CACHE_DIR.chmod(0o700)
+    except OSError as exc:
+        raise EbayApiError("Unable to secure the local eBay token cache.") from exc
 
 
 def _write_cached_token(environment: str, client_id: str, token: str, expires_in: int) -> None:
-    CACHE_DIR.mkdir(exist_ok=True)
+    _secure_cache_directory()
     data = {
         "environment": environment,
         "client_id": client_id,
         "access_token": token,
         "expires_at": time.time() + int(expires_in or 0),
     }
-    TOKEN_CACHE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    temporary_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=CACHE_DIR,
+            prefix=".ebay_token.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            os.fchmod(handle.fileno(), 0o600)
+            json.dump(data, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        os.replace(temporary_path, TOKEN_CACHE)
+        TOKEN_CACHE.chmod(0o600)
+    except (OSError, TypeError, ValueError) as exc:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise EbayApiError("Unable to secure the local eBay token cache.") from exc
 
 
 def _retry_after_seconds(value: Any) -> Optional[float]:

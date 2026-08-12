@@ -5,6 +5,13 @@ import unicodedata
 from dataclasses import dataclass, asdict
 from typing import Any, Optional
 
+from grading_labels import (
+    GRADER_LABEL_PATTERN,
+    GRADER_LABELS,
+    extract_grading_grade,
+)
+from text_safety import safe_text
+
 
 MANUFACTURERS = ("topps", "bowman", "panini", "donruss", "upper deck", "fleer")
 PRODUCTS = ("chrome", "prizm", "select", "optic", "mosaic", "finest", "heritage", "update", "stadium club")
@@ -15,7 +22,7 @@ PARALLELS = (
     "shimmer", "refractor", "atomic", "speckle", "disco", "wave",
     "gold", "orange", "red", "blue", "green", "purple", "black", "silver",
 )
-GRADERS = ("psa", "bgs", "sgc", "cgc", "tag")
+GRADERS = GRADER_LABELS
 
 
 @dataclass(frozen=True)
@@ -38,7 +45,7 @@ class CardIdentity:
 
 
 def normalize_text(value: Any) -> str:
-    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = unicodedata.normalize("NFKD", safe_text(value))
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = text.lower().replace("–", "-").replace("—", "-")
     text = re.sub(r"[^a-z0-9#/' .+-]+", " ", text)
@@ -56,8 +63,9 @@ def _extract_player_from_query(query: str) -> str:
     text = normalize_text(query)
     removals = [
         r"\b(?:19|20)\d{2}\b", r"(?<!\w)#\s*[a-z0-9.-]+",
-        r"\b(?:psa|bgs|sgc|cgc|tag)\s*\d{1,2}(?:\.\d)?\b",
-        r"\b(?:rookie|rc|raw|auto|autograph|card|cards)\b",
+        rf"(?<![a-z0-9])(?:{GRADER_LABEL_PATTERN})\s*-?\s*"
+        r"\d{1,2}(?:\.\d)?(?![a-z0-9])",
+        r"\b(?:rookie|rc|raw|autos?|autographs?|autographed|signed|card|cards)\b",
     ]
     for term in MANUFACTURERS + PRODUCTS + PARALLELS:
         removals.append(rf"\b{re.escape(term)}\b")
@@ -74,7 +82,7 @@ def parse_card_identity(title: str, query: str = "") -> CardIdentity:
     if not number_match:
         number_match = re.search(r"\b(?:no|number)\.?\s*#?\s*([a-z0-9]+(?:[-.][a-z0-9]+)*)\b", text)
     serial_match = re.search(r"(?<!\d)(\d{1,4})\s*/\s*(\d{1,4})(?!\d)", text)
-    grade_match = re.search(r"\b(psa|bgs|sgc|cgc|tag)\s*-?\s*(\d{1,2}(?:\.\d)?)\b", text)
+    grading_grade = extract_grading_grade(text)
 
     player = _extract_player_from_query(query_text) if query_text else ""
     return CardIdentity(
@@ -86,8 +94,10 @@ def parse_card_identity(title: str, query: str = "") -> CardIdentity:
         parallel=_first_phrase(text, PARALLELS).title(),
         serial_number=(f"{serial_match.group(1)}/{serial_match.group(2)}" if serial_match else ""),
         print_run=int(serial_match.group(2)) if serial_match else None,
-        autograph=bool(re.search(r"\b(?:auto|autograph|signed)\b", text)),
+        autograph=bool(
+            re.search(r"\b(?:autos?|autographs?|autographed|signed)\b", text)
+        ),
         rookie=bool(re.search(r"\b(?:rookie|rc)\b", text)),
-        grader=grade_match.group(1).upper() if grade_match else "",
-        grade=float(grade_match.group(2)) if grade_match else None,
+        grader=grading_grade[0] if grading_grade else "",
+        grade=grading_grade[1] if grading_grade else None,
     )

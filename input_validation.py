@@ -9,6 +9,13 @@ from typing import Any
 
 import pandas as pd
 
+from valuation_safety import (
+    ALLOWED_VERIFICATION_STATUSES,
+    VERIFIED_STATUS,
+    normalize_verification_status,
+    valuation_provenance_flags,
+)
+
 
 VALUATION_REQUIRED_COLUMNS = (
     "keyword",
@@ -17,6 +24,11 @@ VALUATION_REQUIRED_COLUMNS = (
     "psa10_value",
     "gem_rate_estimate",
     "psa9_rate_estimate",
+    "verification_status",
+    "verified_at",
+    "expires_at",
+    "source_url",
+    "comp_count",
     "notes",
 )
 
@@ -29,8 +41,18 @@ LISTING_REQUIRED_COLUMNS = (
     "condition",
 )
 
+MAX_CSV_UPLOAD_MB = 5
+MAX_CSV_BYTES = MAX_CSV_UPLOAD_MB * 1024 * 1024
+MAX_CSV_COLUMNS = 64
+MAX_LISTING_ROWS = 1000
+MAX_VALUATION_ROWS = 1000
+
 SETTING_NUMBER_RANGES = {
     "ebay_fee_pct": (0.0, 1.0),
+    "purchase_tax_pct": (0.0, 1.0),
+    "promoted_listing_fee_pct": (0.0, 1.0),
+    "return_defect_allowance_pct": (0.0, 1.0),
+    "grading_loss_risk_pct": (0.0, 1.0),
     "raw_flip_shipping_allowance": (0.0, None),
     "psa_grading_fee": (0.0, None),
     "psa_shipping_insurance_allowance": (0.0, None),
@@ -121,6 +143,20 @@ def validate_settings(settings: Any) -> dict[str, Any]:
             )
         validated[key] = parsed
 
+    combined_selling_rate = sum(
+        validated[key]
+        for key in (
+            "ebay_fee_pct",
+            "promoted_listing_fee_pct",
+            "return_defect_allowance_pct",
+        )
+    )
+    if combined_selling_rate > 1:
+        raise InputValidationError(
+            "Combined marketplace, promoted-listing, and return/defect rates "
+            "must not exceed 1."
+        )
+
     if not isinstance(settings.get("raw_only"), bool):
         raise InputValidationError("Setting 'raw_only' must be true or false.")
 
@@ -139,9 +175,14 @@ def _validate_frame_shape(
     frame: Any,
     required_columns: tuple[str, ...],
     label: str,
+    max_rows: int,
 ) -> pd.DataFrame:
     if not isinstance(frame, pd.DataFrame):
         raise InputValidationError(f"{label} input must be tabular CSV data.")
+    if len(frame.columns) > MAX_CSV_COLUMNS:
+        raise InputValidationError(
+            f"{label} CSV must contain no more than {MAX_CSV_COLUMNS} columns."
+        )
     if frame.columns.duplicated().any():
         raise InputValidationError(f"{label} CSV contains duplicate column names.")
 
@@ -154,6 +195,10 @@ def _validate_frame_shape(
         )
     if frame.empty:
         raise InputValidationError(f"{label} CSV must contain at least one data row.")
+    if len(frame.index) > max_rows:
+        raise InputValidationError(
+            f"{label} CSV must contain no more than {max_rows} data rows."
+        )
     return frame.copy()
 
 
@@ -210,9 +255,30 @@ def validate_valuation_frame(frame: Any) -> pd.DataFrame:
         frame,
         VALUATION_REQUIRED_COLUMNS,
         "Valuation",
+        MAX_VALUATION_ROWS,
     )
     validated["keyword"] = _required_text(validated, "keyword", "Valuation")
     validated["notes"] = _required_text(validated, "notes", "Valuation")
+    validated["verification_status"] = _required_text(
+        validated,
+        "verification_status",
+        "Valuation",
+    ).map(normalize_verification_status)
+
+    invalid_status = ~validated["verification_status"].isin(
+        ALLOWED_VERIFICATION_STATUSES
+    )
+    if invalid_status.any():
+        rows = _invalid_row_numbers(invalid_status)
+        raise InputValidationError(
+            "Valuation CSV column 'verification_status' contains an unsupported "
+            f"status on row(s): {rows}."
+        )
+
+    for column in ("verified_at", "expires_at", "source_url"):
+        validated[column] = validated[column].map(
+            lambda value: value.strip() if isinstance(value, str) else value
+        )
 
     identity_keys = (
         validated["keyword"]
@@ -254,6 +320,32 @@ def validate_valuation_frame(frame: Any) -> pd.DataFrame:
             + rows
             + "."
         )
+
+    verified_mask = validated["verification_status"].eq(VERIFIED_STATUS)
+    missing_provenance = pd.Series(False, index=validated.index)
+    invalid_provenance = pd.Series(False, index=validated.index)
+    for index in validated.index[verified_mask]:
+        flags = valuation_provenance_flags(validated.loc[index])
+        missing_provenance.loc[index] = "missing_valuation_provenance" in flags
+        invalid_provenance.loc[index] = "invalid_valuation_provenance" in flags
+
+    if missing_provenance.any():
+        rows = _invalid_row_numbers(missing_provenance)
+        raise InputValidationError(
+            "Verified valuation rows are missing required provenance on row(s): "
+            + rows
+            + "."
+        )
+    if invalid_provenance.any():
+        rows = _invalid_row_numbers(invalid_provenance)
+        raise InputValidationError(
+            "Verified valuation provenance is malformed on row(s): " + rows + "."
+        )
+
+    for index in validated.index[verified_mask]:
+        validated.loc[index, "comp_count"] = int(
+            float(validated.loc[index, "comp_count"])
+        )
     return validated
 
 
@@ -262,6 +354,7 @@ def validate_listing_frame(frame: Any) -> pd.DataFrame:
         frame,
         LISTING_REQUIRED_COLUMNS,
         "Listings",
+        MAX_LISTING_ROWS,
     )
     for column in ("title", "currency", "buying_options", "condition"):
         validated[column] = _required_text(validated, column, "Listings")
@@ -288,17 +381,65 @@ def _load_csv(
     source: Any,
     label: str,
     validator: Callable[[Any], pd.DataFrame],
+    max_rows: int,
 ) -> pd.DataFrame:
+    source_size = _csv_source_size_bytes(source)
+    if source_size is not None and source_size > MAX_CSV_BYTES:
+        raise InputValidationError(
+            f"{label} CSV must be {MAX_CSV_UPLOAD_MB} MB or smaller."
+        )
     try:
-        frame = pd.read_csv(source)
-    except (OSError, UnicodeError, ValueError, pd.errors.ParserError, pd.errors.EmptyDataError):
+        frame = pd.read_csv(source, nrows=max_rows + 1)
+    except (
+        OSError,
+        TypeError,
+        UnicodeError,
+        ValueError,
+        pd.errors.ParserError,
+        pd.errors.EmptyDataError,
+    ):
         raise InputValidationError(f"{label} CSV could not be read.") from None
     return validator(frame)
 
 
+def _csv_source_size_bytes(source: Any) -> int | None:
+    try:
+        if isinstance(source, (str, Path)):
+            return Path(source).stat().st_size
+
+        declared_size = getattr(source, "size", None)
+        if isinstance(declared_size, int) and not isinstance(declared_size, bool):
+            return max(declared_size, 0)
+
+        getbuffer = getattr(source, "getbuffer", None)
+        if callable(getbuffer):
+            return int(getbuffer().nbytes)
+
+        getvalue = getattr(source, "getvalue", None)
+        if callable(getvalue):
+            value = getvalue()
+            if isinstance(value, str):
+                return len(value.encode("utf-8"))
+            if isinstance(value, bytes):
+                return len(value)
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
+    return None
+
+
 def load_valuation_csv(source: Any) -> pd.DataFrame:
-    return _load_csv(source, "Valuation", validate_valuation_frame)
+    return _load_csv(
+        source,
+        "Valuation",
+        validate_valuation_frame,
+        MAX_VALUATION_ROWS,
+    )
 
 
 def load_listing_csv(source: Any) -> pd.DataFrame:
-    return _load_csv(source, "Listings", validate_listing_frame)
+    return _load_csv(
+        source,
+        "Listings",
+        validate_listing_frame,
+        MAX_LISTING_ROWS,
+    )

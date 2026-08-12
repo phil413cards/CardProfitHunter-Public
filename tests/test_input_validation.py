@@ -1,5 +1,6 @@
 import json
 import unittest
+from datetime import date, timedelta
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,6 +9,10 @@ import pandas as pd
 
 from input_validation import (
     InputValidationError,
+    MAX_CSV_BYTES,
+    MAX_CSV_COLUMNS,
+    MAX_LISTING_ROWS,
+    MAX_VALUATION_ROWS,
     load_listing_csv,
     load_settings_file,
     load_valuation_csv,
@@ -23,6 +28,10 @@ from input_validation import (
 def valid_settings():
     return {
         "ebay_fee_pct": 0.1325,
+        "purchase_tax_pct": 0.10,
+        "promoted_listing_fee_pct": 0.05,
+        "return_defect_allowance_pct": 0.05,
+        "grading_loss_risk_pct": 0.01,
         "raw_flip_shipping_allowance": 6.0,
         "psa_grading_fee": 25.0,
         "psa_shipping_insurance_allowance": 12.0,
@@ -45,6 +54,11 @@ def valid_valuations():
         "psa10_value": 300.0,
         "gem_rate_estimate": 0.4,
         "psa9_rate_estimate": 0.4,
+        "verification_status": "verified",
+        "verified_at": (date.today() - timedelta(days=1)).isoformat(),
+        "expires_at": (date.today() + timedelta(days=30)).isoformat(),
+        "source_url": "https://example.com/verified-comps",
+        "comp_count": 10,
         "notes": "Verified comps",
     }])
 
@@ -80,6 +94,22 @@ class SettingsValidationTests(unittest.TestCase):
             ("not finite", valid_settings(), "minimum_psa_expected_roi_pct"),
             ("negative cost", valid_settings(), "raw_flip_shipping_allowance"),
             ("fee above one", valid_settings(), "ebay_fee_pct"),
+            ("purchase tax above one", valid_settings(), "purchase_tax_pct"),
+            (
+                "promoted fee below zero",
+                valid_settings(),
+                "promoted_listing_fee_pct",
+            ),
+            (
+                "return allowance above one",
+                valid_settings(),
+                "return_defect_allowance_pct",
+            ),
+            (
+                "grading risk above one",
+                valid_settings(),
+                "grading_loss_risk_pct",
+            ),
             ("margin above one", valid_settings(), "offer_safety_margin_pct"),
             ("raw only not bool", valid_settings(), "raw_only"),
         ]
@@ -89,6 +119,10 @@ class SettingsValidationTests(unittest.TestCase):
             "minimum_raw_flip_profit": "abc",
             "minimum_psa_expected_roi_pct": float("nan"),
             "raw_flip_shipping_allowance": -1,
+            "purchase_tax_pct": 1.1,
+            "promoted_listing_fee_pct": -0.1,
+            "return_defect_allowance_pct": 1.1,
+            "grading_loss_risk_pct": 1.1,
             "offer_safety_margin_pct": 1.1,
             "raw_only": "true",
         }
@@ -103,6 +137,31 @@ class SettingsValidationTests(unittest.TestCase):
                     source[field] = replacements[field]
                 with self.assertRaises(InputValidationError):
                     validate_settings(source)
+
+    def test_combined_selling_cost_rates_cannot_exceed_sale_value(self):
+        settings = valid_settings()
+        settings.update({
+            "ebay_fee_pct": 0.50,
+            "promoted_listing_fee_pct": 0.30,
+            "return_defect_allowance_pct": 0.30,
+        })
+
+        with self.assertRaisesRegex(InputValidationError, "Combined marketplace"):
+            validate_settings(settings)
+
+    def test_bundled_settings_enable_all_approved_cost_categories(self):
+        settings = load_settings_file(
+            Path(__file__).resolve().parents[1] / "config" / "settings.json"
+        )
+
+        for key in (
+            "purchase_tax_pct",
+            "promoted_listing_fee_pct",
+            "return_defect_allowance_pct",
+            "grading_loss_risk_pct",
+        ):
+            with self.subTest(key=key):
+                self.assertGreater(settings[key], 0)
 
     def test_settings_file_errors_are_sanitized(self):
         with TemporaryDirectory() as temp_dir:
@@ -130,11 +189,58 @@ class ValuationValidationTests(unittest.TestCase):
     def test_valid_and_demonstration_valuations_are_allowed(self):
         frame = valid_valuations()
         frame.loc[0, "notes"] = "Example only - non-actionable"
+        frame.loc[0, "verification_status"] = "demonstration"
+        for column in ("verified_at", "expires_at", "source_url", "comp_count"):
+            frame[column] = frame[column].astype(object)
+            frame.loc[0, column] = None
 
         result = validate_valuation_frame(frame)
 
         self.assertEqual(result.loc[0, "keyword"], frame.loc[0, "keyword"])
+        self.assertEqual(result.loc[0, "verification_status"], "demonstration")
         self.assertIn("Example only", result.loc[0, "notes"])
+
+    def test_expired_verified_valuation_can_load_for_review(self):
+        frame = valid_valuations()
+        frame.loc[0, "expires_at"] = (date.today() - timedelta(days=1)).isoformat()
+        frame.loc[0, "verified_at"] = (date.today() - timedelta(days=30)).isoformat()
+
+        result = validate_valuation_frame(frame)
+
+        self.assertEqual(result.loc[0, "verification_status"], "verified")
+
+    def test_verified_provenance_must_be_complete_and_well_formed(self):
+        cases = (
+            ("missing verified date", "verified_at", None, "missing required provenance"),
+            ("missing expiry", "expires_at", "", "missing required provenance"),
+            ("missing source", "source_url", None, "missing required provenance"),
+            ("missing comp count", "comp_count", None, "missing required provenance"),
+            ("bad verified date", "verified_at", "08/09/2026", "malformed"),
+            ("bad expiry", "expires_at", "tomorrow", "malformed"),
+            ("http source", "source_url", "http://example.com/private", "malformed"),
+            ("fractional comp count", "comp_count", 1.5, "malformed"),
+            ("zero comp count", "comp_count", 0, "malformed"),
+        )
+
+        for name, field, value, expected_message in cases:
+            with self.subTest(name=name):
+                frame = valid_valuations()
+                frame[field] = frame[field].astype(object)
+                frame.loc[0, field] = value
+                with self.assertRaisesRegex(
+                    InputValidationError,
+                    expected_message,
+                ):
+                    validate_valuation_frame(frame)
+
+    def test_unsupported_verification_status_is_rejected_without_echoing_it(self):
+        frame = valid_valuations()
+        frame.loc[0, "verification_status"] = "PRIVATE_UNSAFE_STATUS"
+
+        with self.assertRaisesRegex(InputValidationError, "unsupported status") as raised:
+            validate_valuation_frame(frame)
+
+        self.assertNotIn("PRIVATE_UNSAFE_STATUS", str(raised.exception))
 
     def test_invalid_valuation_rows_are_rejected(self):
         cases = [
@@ -176,13 +282,27 @@ class ValuationValidationTests(unittest.TestCase):
             validate_valuation_frame(frame)
 
     def test_missing_columns_and_empty_files_are_rejected(self):
-        missing = valid_valuations().drop(columns=["notes"])
+        missing = valid_valuations().drop(columns=["verification_status"])
         empty = valid_valuations().iloc[0:0]
 
         with self.assertRaisesRegex(InputValidationError, "missing required columns"):
             validate_valuation_frame(missing)
         with self.assertRaisesRegex(InputValidationError, "at least one data row"):
             validate_valuation_frame(empty)
+
+    def test_valuation_row_and_column_limits_are_enforced(self):
+        too_many_rows = pd.concat(
+            [valid_valuations()] * (MAX_VALUATION_ROWS + 1),
+            ignore_index=True,
+        )
+        too_many_columns = valid_valuations()
+        for index in range(MAX_CSV_COLUMNS):
+            too_many_columns[f"extra_{index}"] = index
+
+        with self.assertRaisesRegex(InputValidationError, "no more than 1000"):
+            validate_valuation_frame(too_many_rows)
+        with self.assertRaisesRegex(InputValidationError, "no more than 64"):
+            validate_valuation_frame(too_many_columns)
 
     def test_malformed_valuation_csv_error_is_sanitized(self):
         source = StringIO('keyword,notes\n"private malformed value')
@@ -249,6 +369,36 @@ class ListingValidationTests(unittest.TestCase):
 
         self.assertEqual(len(result), 1)
         self.assertEqual(result.loc[0, "currency"], "USD")
+
+    def test_listing_row_limit_is_enforced_before_analysis(self):
+        too_many_rows = pd.concat(
+            [valid_listings()] * (MAX_LISTING_ROWS + 1),
+            ignore_index=True,
+        )
+
+        with self.assertRaisesRegex(InputValidationError, "no more than 1000"):
+            validate_listing_frame(too_many_rows)
+
+    def test_csv_loader_stops_after_the_listing_row_limit(self):
+        source = StringIO(
+            "title,price,shipping,currency,buying_options,condition\n"
+            + "Test Card,10,0,USD,FIXED_PRICE,Used\n" * (MAX_LISTING_ROWS + 1)
+        )
+
+        with self.assertRaisesRegex(InputValidationError, "no more than 1000"):
+            load_listing_csv(source)
+
+    def test_oversized_csv_is_rejected_without_reading_or_echoing_content(self):
+        class OversizedUpload:
+            size = MAX_CSV_BYTES + 1
+
+            def read(self, *args, **kwargs):
+                raise AssertionError("private submitted content")
+
+        with self.assertRaisesRegex(InputValidationError, "5 MB or smaller") as raised:
+            load_listing_csv(OversizedUpload())
+
+        self.assertNotIn("private submitted content", str(raised.exception))
 
 
 class SearchInputValidationTests(unittest.TestCase):

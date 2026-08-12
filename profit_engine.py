@@ -7,15 +7,37 @@ from typing import Optional, Any
 
 import pandas as pd
 
+from grading_labels import GRADER_LABEL_PATTERN, has_grading_language
+from listing_classifier import (
+    has_break_listing_language,
+    has_choice_listing_language,
+    has_damage_language,
+    has_multi_card_listing_language,
+    has_non_card_merchandise_language,
+    has_non_actual_or_presale_language,
+    has_randomized_product_language,
+    has_reprint_custom_language,
+)
+from valuation_safety import (
+    normalize_verification_status,
+    valuation_notes_are_non_actionable,
+    valuation_provenance_flags,
+)
+from seller_eligibility import evaluate_seller_eligibility
+from text_safety import is_missing_value, required_text_issue, safe_text
 
-SLAB_WORDS = [
-    "psa", "bgs", "sgc", "cgc", "tag", "arena club", "graded", "gem mint",
-    "mint 10", "slab", "slabbed"
-]
 
 BAD_WORDS = [
     "reprint", "rp", "custom", "facsimile", "digital", "break", "case break",
-    "box break", "lot", "lots", "read", "not actual card", "proxy"
+    "box break", "lot", "lots", "read", "not actual card", "proxy",
+    "redemption", "reward points", "rewards points", "panini points",
+    "wild card points", "point card", "points card", "code card",
+    "digital code", "home run challenge", "unused code", "scratch code",
+    "scratched code", "qr code", "replica", "reproduction", "repro",
+    "unlicensed", "unauthorized", "fan art", "aceo", "novelty",
+    "homemade", "counterfeit", "fake", "bootleg", "trimmed", "trimming",
+    "altered", "restored", "color added", "evidence of trimming",
+    "minimum size", "minimum size requirement",
 ]
 
 GOOD_WORDS = [
@@ -36,7 +58,8 @@ IDENTITY_STOPWORDS = {
     "the", "a", "an", "and", "or", "of", "to", "for", "with", "card", "cards",
     "raw", "ungraded", "sports", "trading", "sharp", "clean", "nice", "mint",
     "nm", "mt", "condition", "sale", "rare", "authentic", "original", "single",
-    "shipping", "free",
+    "shipping", "free", "baseball", "basketball", "football", "hockey", "nba",
+    "mlb", "nfl", "nhl",
 }
 
 PRODUCT_SET_TERMS = {
@@ -52,9 +75,34 @@ PARALLEL_TERMS = {
 }
 
 VARIANT_TERMS = {
-    "autograph", "custom", "digital", "facsimile", "insert", "proxy", "reprint",
-    "rookie",
+    "autograph", "autographed", "signed", "custom", "digital", "facsimile",
+    "insert", "proxy", "reprint", "rookie", "variation", "image", "photo",
+    "jersey", "patch", "relic",
 }
+
+BENIGN_LISTING_IDENTITY_TERMS = {
+    "accept", "centered", "i", "ll", "obo", "offer", "offers", "reasonable",
+    "true", "well",
+}
+
+TEAM_LOCATION_CONTEXT_TERMS = {
+    "angeles", "antonio", "cleveland", "la", "los", "san",
+}
+
+TEAM_CONTEXT_TERMS = {
+    "angels", "cavaliers", "spurs",
+}
+
+HARD_IDENTITY_TERMS = PRODUCT_SET_TERMS | PARALLEL_TERMS | VARIANT_TERMS
+
+EXPLICIT_CARD_NUMBER_PATTERN = re.compile(
+    r"(?<!\w)(?:#\s*[a-z0-9]+(?:[-.][a-z0-9]+)*|"
+    r"(?:no|number)\.?\s*#?\s*[a-z0-9]+(?:[-.][a-z0-9]+)*)",
+)
+
+INVENTORY_TOKEN_PATTERN = re.compile(
+    r"(?:[a-z]{1,3}\d{4,}|\d{4,}[a-z]{1,3})",
+)
 
 SUPPORTED_BUYING_OPTIONS = {"FIXED_PRICE", "BEST_OFFER"}
 
@@ -65,16 +113,12 @@ ACTIONABLE_ACTIONS = {
     "BUY_GRADE_PSA",
 }
 
-NON_ACTIONABLE_VALUATION_PATTERNS = (
-    r"\bexample(?:\s+only)?\b",
-    r"\bdemo\b",
-    r"\bdemonstration\b",
-    r"\bunverified\b",
-    r"\bnon[-\s]?actionable\b",
-)
-
 REQUIRED_MODELED_COSTS = {
     "ebay_fee_pct": 1.0,
+    "purchase_tax_pct": 1.0,
+    "promoted_listing_fee_pct": 1.0,
+    "return_defect_allowance_pct": 1.0,
+    "grading_loss_risk_pct": 1.0,
     "raw_flip_shipping_allowance": None,
     "psa_grading_fee": None,
     "psa_shipping_insurance_allowance": None,
@@ -117,6 +161,13 @@ class ProfitResult:
     gem_rate_estimate: Optional[float]
     psa9_rate_estimate: Optional[float]
 
+    verification_status: str
+    verified_at: str
+    expires_at: str
+    source_url: str
+    comp_count: Optional[int]
+    valuation_notes: str
+
     print_run: Optional[int]
     serial_detected: str
     raw_candidate: bool
@@ -138,7 +189,7 @@ class _CardValueMatch:
 
 
 def normalize(text: Any) -> str:
-    return re.sub(r"\s+", " ", str(text or "")).strip()
+    return re.sub(r"\s+", " ", safe_text(text)).strip()
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -152,26 +203,8 @@ def safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def safe_int(value: Any) -> Optional[int]:
-    try:
-        if value is None or value == "":
-            return None
-        if pd.isna(value):
-            return None
-        return int(value)
-    except Exception:
-        return None
-
-
 def _is_missing(value: Any) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, str) and not value.strip():
-        return True
-    try:
-        return bool(pd.isna(value))
-    except (TypeError, ValueError):
-        return False
+    return is_missing_value(value)
 
 
 def _finite_float(value: Any) -> Optional[float]:
@@ -199,15 +232,21 @@ def _modeled_cost_flags(settings: dict) -> list[str]:
         value = _finite_float(raw_value)
         if value is None or value < 0 or (maximum is not None and value > maximum):
             flags.append(f"invalid_modeled_cost_{key}")
+
+    selling_rate_keys = (
+        "ebay_fee_pct",
+        "promoted_listing_fee_pct",
+        "return_defect_allowance_pct",
+    )
+    selling_rates = [_finite_float(settings.get(key)) for key in selling_rate_keys]
+    if all(rate is not None and 0 <= rate <= 1 for rate in selling_rates):
+        if sum(selling_rates) > 1:
+            flags.append("invalid_modeled_cost_combined_selling_rate")
     return flags
 
 
 def _valuation_is_non_actionable(notes: str) -> bool:
-    normalized_notes = normalize(notes).lower()
-    return any(
-        re.search(pattern, normalized_notes)
-        for pattern in NON_ACTIONABLE_VALUATION_PATTERNS
-    )
+    return valuation_notes_are_non_actionable(notes)
 
 
 def _floor_currency(value: float) -> float:
@@ -242,15 +281,7 @@ def contains_term(text: str, terms: list[str]) -> bool:
 
 
 def _is_slab_listing(title: str, condition: str = "") -> bool:
-    compact_grade = re.search(
-        r"(?<![a-z0-9])(?:psa|bgs|sgc|cgc)\s*-?\s*\d{1,2}(?:\.\d)?(?![a-z0-9])",
-        title.lower(),
-    )
-    condition_is_graded = contains_term(
-        condition,
-        ["graded", "slabbed", "certified", "professionally graded"],
-    )
-    return contains_term(title, SLAB_WORDS) or compact_grade is not None or condition_is_graded
+    return has_grading_language(title, condition)
 
 
 def detect_print_run(title: str) -> tuple[Optional[int], str]:
@@ -293,12 +324,103 @@ def _normalize_identity_text(text: str) -> str:
     return normalized
 
 
-def _identity_tokens(text: str) -> set[str]:
+def _identity_token_sequence(text: str) -> list[str]:
     normalized = _normalize_identity_text(text)
-    return {
+    return [
         token for token in re.findall(r"[a-z0-9]+", normalized)
         if not token.isdigit() and token not in IDENTITY_STOPWORDS
+    ]
+
+
+def _identity_tokens(text: str) -> set[str]:
+    return set(_identity_token_sequence(text))
+
+
+def _allowed_team_location_extras(
+    title: str,
+    optional_context_tokens: set[str],
+) -> set[str]:
+    team_anchors = optional_context_tokens & TEAM_CONTEXT_TERMS
+    if not team_anchors:
+        return set()
+
+    sequence = _identity_token_sequence(title)
+    allowed = set()
+    for index, token in enumerate(sequence):
+        if token not in team_anchors:
+            continue
+        for offset in (1, 2):
+            prior_index = index - offset
+            if prior_index < 0:
+                break
+            prior = sequence[prior_index]
+            if prior not in TEAM_LOCATION_CONTEXT_TERMS:
+                break
+            allowed.add(prior)
+    return allowed
+
+
+def _matches_with_strong_anchors(
+    title: str,
+    keyword: str,
+    title_tokens: set[str],
+    keyword_tokens: set[str],
+    keyword_years: set[str],
+    keyword_numbers: set[str],
+) -> tuple[bool, str] | None:
+    """
+    Allow limited title wording differences only for fully anchored identities.
+
+    The valuation keyword must contain an explicit card number, a year, a product
+    or set, and at least two pre-number name tokens. Material set, parallel,
+    variant, year, number, and print-run comparisons run before this helper.
+    """
+    normalized_keyword = _normalize_identity_text(keyword)
+    number_match = EXPLICIT_CARD_NUMBER_PATTERN.search(normalized_keyword)
+    keyword_set_terms = keyword_tokens & PRODUCT_SET_TERMS
+    if (
+        number_match is None
+        or not keyword_years
+        or not keyword_numbers
+        or not keyword_set_terms
+    ):
+        return None
+
+    required_name_tokens = (
+        _identity_tokens(normalized_keyword[:number_match.start()])
+        - HARD_IDENTITY_TERMS
+    )
+    if len(required_name_tokens) < 2:
+        return None
+
+    optional_context_tokens = (
+        _identity_tokens(normalized_keyword[number_match.end():])
+        - HARD_IDENTITY_TERMS
+    )
+
+    if not required_name_tokens.issubset(title_tokens):
+        return False, "insufficient_card_identity"
+
+    missing_keyword_tokens = keyword_tokens - title_tokens
+    if not missing_keyword_tokens.issubset(optional_context_tokens):
+        return False, "insufficient_card_identity"
+
+    extra_title_tokens = title_tokens - keyword_tokens
+    allowed_location_extras = _allowed_team_location_extras(
+        title,
+        optional_context_tokens,
+    )
+    unexplained_extras = {
+        token
+        for token in extra_title_tokens
+        if token not in BENIGN_LISTING_IDENTITY_TERMS
+        and token not in allowed_location_extras
+        and INVENTORY_TOKEN_PATTERN.fullmatch(token) is None
     }
+    if unexplained_extras:
+        return False, "card_identity_conflict_modifier"
+
+    return True, ""
 
 
 def _normalize_two_digit_year(value: str) -> str:
@@ -340,7 +462,10 @@ def _extract_years(text: str) -> tuple[set[str], bool]:
         before = normalized[:match.start()]
         after = normalized[match.end():]
         explicit_number = re.search(r"(?:#|\bno\.?\s*|\bnumber\s*)$", before)
-        grader = re.search(r"\b(?:psa|bgs|sgc|cgc)\s*-?\s*$", before)
+        grader = re.search(
+            rf"(?<![a-z0-9])(?:{GRADER_LABEL_PATTERN})\s*-?\s*$",
+            before,
+        )
         excluded_punctuation = before.endswith(("$", "/", ".")) or after.startswith(("/", "."))
         quantity = after.startswith(("x", "×"))
         if int(match.group(1)) <= 39 and not (
@@ -360,7 +485,8 @@ def _extract_card_numbers(text: str) -> tuple[set[str], bool]:
     removal_patterns = [
         r"(?<!\w)#\s*[a-z0-9]+(?:[-.][a-z0-9]+)*",
         r"\b(?:no|number)\.?\s*#?\s*[a-z0-9]+(?:[-.][a-z0-9]+)*\b",
-        r"(?<![a-z0-9])(?:psa|bgs|sgc|cgc)\s*-?\s*\d{1,2}(?:\.\d)?(?![a-z0-9])",
+        rf"(?<![a-z0-9])(?:{GRADER_LABEL_PATTERN})\s*-?\s*"
+        r"\d{1,2}(?:\.\d)?(?![a-z0-9])",
         r"\b(?:19|20)\d{2}(?:[-/]\d{2})?\b",
         r"(?<![a-z0-9])'\d{2}(?!\d)",
         r"^\s*\d{2}(?=\s)",
@@ -423,6 +549,20 @@ def _evaluate_card_identity(title: str, keyword: str) -> tuple[bool, float, str,
     if (title_tokens & VARIANT_TERMS) != (keyword_tokens & VARIANT_TERMS):
         return False, 0.0, "card_identity_conflict_variant", overlap_count, specificity, exact_phrase
 
+    anchored_match = _matches_with_strong_anchors(
+        title,
+        keyword,
+        title_tokens,
+        keyword_tokens,
+        keyword_years,
+        keyword_numbers,
+    )
+    if anchored_match is not None:
+        matched, reason = anchored_match
+        if matched:
+            return True, 1.0, "", overlap_count, specificity, exact_phrase
+        return False, 0.0, reason, overlap_count, specificity, exact_phrase
+
     if title_tokens - keyword_tokens:
         return False, 0.0, "card_identity_conflict_modifier", overlap_count, specificity, exact_phrase
 
@@ -439,6 +579,22 @@ def _find_card_value_match(
 ) -> _CardValueMatch:
     if _is_slab_listing(title, condition):
         return _CardValueMatch(None, 0.0, "graded_or_slabbed")
+    if has_non_card_merchandise_language(title, condition):
+        return _CardValueMatch(None, 0.0, "non_card_merchandise")
+    if has_choice_listing_language(title, condition):
+        return _CardValueMatch(None, 0.0, "pick_your_card")
+    if has_reprint_custom_language(title, condition):
+        return _CardValueMatch(None, 0.0, "reprint_or_custom")
+    if has_break_listing_language(title, condition):
+        return _CardValueMatch(None, 0.0, "break_listing")
+    if has_non_actual_or_presale_language(title, condition):
+        return _CardValueMatch(None, 0.0, "presale_or_non_actual_item")
+    if has_randomized_product_language(title, condition):
+        return _CardValueMatch(None, 0.0, "randomized_product")
+    if has_multi_card_listing_language(title, condition):
+        return _CardValueMatch(None, 0.0, "multi_card_listing")
+    if has_damage_language(title, condition):
+        return _CardValueMatch(None, 0.0, "damage_language")
     if contains_term(title, BAD_WORDS):
         return _CardValueMatch(None, 0.0, "bad_listing_language")
 
@@ -466,6 +622,15 @@ def _find_card_value_match(
 
     plausible = [candidate for candidate in rejected if candidate[0] >= min(3, candidate[1])]
     if len(plausible) > 1:
+        plausible.sort(key=lambda candidate: (candidate[0], candidate[1]), reverse=True)
+        best_key = (plausible[0][0], plausible[0][1])
+        best = [
+            candidate
+            for candidate in plausible
+            if (candidate[0], candidate[1]) == best_key
+        ]
+        if len(best) == 1:
+            return _CardValueMatch(None, 0.0, best[0][2])
         return _CardValueMatch(None, 0.0, "ambiguous_card_value_match")
     if plausible:
         return _CardValueMatch(None, 0.0, plausible[0][2])
@@ -480,10 +645,29 @@ def find_best_card_value(title: str, card_values: pd.DataFrame) -> tuple[Optiona
 
 def calc_raw_flip(purchase_total: float, raw_market_value: float, settings: dict) -> tuple[float, float]:
     ebay_fee_pct = safe_float(settings.get("ebay_fee_pct"), 0.1325)
+    purchase_tax_pct = safe_float(settings.get("purchase_tax_pct"), 0.10)
+    promoted_listing_fee_pct = safe_float(
+        settings.get("promoted_listing_fee_pct"),
+        0.05,
+    )
+    return_defect_allowance_pct = safe_float(
+        settings.get("return_defect_allowance_pct"),
+        0.05,
+    )
     shipping_allowance = safe_float(settings.get("raw_flip_shipping_allowance"), 6)
 
-    fees = raw_market_value * ebay_fee_pct
-    total_modeled_cost = purchase_total + fees + shipping_allowance
+    purchase_tax = purchase_total * purchase_tax_pct
+    selling_costs = raw_market_value * (
+        ebay_fee_pct
+        + promoted_listing_fee_pct
+        + return_defect_allowance_pct
+    )
+    total_modeled_cost = (
+        purchase_total
+        + purchase_tax
+        + selling_costs
+        + shipping_allowance
+    )
     profit = raw_market_value - total_modeled_cost
     roi = (profit / total_modeled_cost) * 100 if total_modeled_cost > 0 else 0
     return round(profit, 2), round(roi, 1)
@@ -511,6 +695,19 @@ def calc_psa_flip(
     settings: dict,
 ) -> tuple[float, float, float]:
     ebay_fee_pct = safe_float(settings.get("ebay_fee_pct"), 0.1325)
+    purchase_tax_pct = safe_float(settings.get("purchase_tax_pct"), 0.10)
+    promoted_listing_fee_pct = safe_float(
+        settings.get("promoted_listing_fee_pct"),
+        0.05,
+    )
+    return_defect_allowance_pct = safe_float(
+        settings.get("return_defect_allowance_pct"),
+        0.05,
+    )
+    grading_loss_risk_pct = safe_float(
+        settings.get("grading_loss_risk_pct"),
+        0.01,
+    )
     psa_grading_fee = safe_float(settings.get("psa_grading_fee"), 25)
     psa_shipping_insurance = safe_float(settings.get("psa_shipping_insurance_allowance"), 12)
     psa_selling_shipping = safe_float(settings.get("psa_selling_shipping_allowance"), 8)
@@ -525,14 +722,23 @@ def calc_psa_flip(
         + raw_market_value * lower_rate
     )
 
-    fees = expected_sale_value * ebay_fee_pct
+    purchase_with_tax = purchase_total * (1 + purchase_tax_pct)
+    grading_costs_at_risk = psa_grading_fee + psa_shipping_insurance
+    grading_loss_allowance = (
+        purchase_with_tax + grading_costs_at_risk
+    ) * grading_loss_risk_pct
+    selling_costs = expected_sale_value * (
+        ebay_fee_pct
+        + promoted_listing_fee_pct
+        + return_defect_allowance_pct
+    )
 
     total_cost = (
-        purchase_total
-        + psa_grading_fee
-        + psa_shipping_insurance
+        purchase_with_tax
+        + grading_costs_at_risk
+        + grading_loss_allowance
         + psa_selling_shipping
-        + fees
+        + selling_costs
     )
 
     profit = expected_sale_value - total_cost
@@ -546,10 +752,17 @@ def _max_purchase_total(
     fixed_modeled_costs: float,
     minimum_profit: float,
     minimum_roi_pct: float,
+    acquisition_cost_multiplier: float = 1.0,
 ) -> float:
+    if acquisition_cost_multiplier <= 0:
+        return 0
     roi_rate = max(minimum_roi_pct, 0) / 100
-    profit_limited = sale_value - fixed_modeled_costs - minimum_profit
-    roi_limited = (sale_value / (1 + roi_rate)) - fixed_modeled_costs
+    profit_limited = (
+        sale_value - fixed_modeled_costs - minimum_profit
+    ) / acquisition_cost_multiplier
+    roi_limited = (
+        (sale_value / (1 + roi_rate)) - fixed_modeled_costs
+    ) / acquisition_cost_multiplier
     return max(min(profit_limited, roi_limited), 0)
 
 
@@ -562,6 +775,24 @@ def calc_max_buy_prices(row: pd.Series, settings: dict) -> tuple[float, float]:
     psa9_rate = safe_float(row.get("psa9_rate_estimate"))
 
     ebay_fee_pct = safe_float(settings.get("ebay_fee_pct"), 0.1325)
+    purchase_tax_pct = safe_float(settings.get("purchase_tax_pct"), 0.10)
+    promoted_listing_fee_pct = safe_float(
+        settings.get("promoted_listing_fee_pct"),
+        0.05,
+    )
+    return_defect_allowance_pct = safe_float(
+        settings.get("return_defect_allowance_pct"),
+        0.05,
+    )
+    grading_loss_risk_pct = safe_float(
+        settings.get("grading_loss_risk_pct"),
+        0.01,
+    )
+    selling_cost_rate = (
+        ebay_fee_pct
+        + promoted_listing_fee_pct
+        + return_defect_allowance_pct
+    )
 
     min_raw_profit = safe_float(settings.get("minimum_raw_flip_profit"), 25)
     min_raw_roi = safe_float(settings.get("minimum_raw_flip_roi_pct"), 20)
@@ -573,12 +804,13 @@ def calc_max_buy_prices(row: pd.Series, settings: dict) -> tuple[float, float]:
     psa_shipping = safe_float(settings.get("psa_shipping_insurance_allowance"), 12)
     psa_sell_ship = safe_float(settings.get("psa_selling_shipping_allowance"), 8)
 
-    raw_fixed_costs = (raw_market_value * ebay_fee_pct) + raw_shipping
+    raw_fixed_costs = (raw_market_value * selling_cost_rate) + raw_shipping
     raw_max_buy = _max_purchase_total(
         raw_market_value,
         raw_fixed_costs,
         min_raw_profit,
         min_raw_roi,
+        1 + purchase_tax_pct,
     )
 
     gem_rate, psa9_rate = _normalized_grade_rates(gem_rate, psa9_rate)
@@ -589,10 +821,10 @@ def calc_max_buy_prices(row: pd.Series, settings: dict) -> tuple[float, float]:
         + raw_market_value * lower_rate
     )
 
+    grading_costs_at_risk = psa_grading_fee + psa_shipping
     psa_fixed_costs = (
-        (psa_expected_sale_value * ebay_fee_pct)
-        + psa_grading_fee
-        + psa_shipping
+        (psa_expected_sale_value * selling_cost_rate)
+        + (grading_costs_at_risk * (1 + grading_loss_risk_pct))
         + psa_sell_ship
     )
     psa_max_buy = _max_purchase_total(
@@ -600,13 +832,16 @@ def calc_max_buy_prices(row: pd.Series, settings: dict) -> tuple[float, float]:
         psa_fixed_costs,
         min_psa_profit,
         min_psa_roi,
+        (1 + purchase_tax_pct) * (1 + grading_loss_risk_pct),
     )
 
     return max(raw_max_buy, 0), max(psa_max_buy, 0)
 
 
 def analyze_listing(listing: pd.Series, card_values: pd.DataFrame, settings: dict) -> ProfitResult:
-    title = normalize(listing.get("title", ""))
+    raw_title = listing.get("title", "")
+    title = normalize(raw_title)
+    title_issue = required_text_issue(raw_title, "title")
     raw_price = listing.get("price")
     raw_shipping = listing.get("shipping")
     parsed_price = _finite_float(raw_price)
@@ -618,9 +853,10 @@ def analyze_listing(listing: pd.Series, card_values: pd.DataFrame, settings: dic
     currency = "" if _is_missing(raw_currency) else normalize(raw_currency).upper()
     item_url = normalize(listing.get("item_url", ""))
     image_url = normalize(listing.get("image_url", ""))
-    seller_username = normalize(listing.get("seller_username", ""))
-    seller_feedback = safe_int(listing.get("seller_feedback"))
-    seller_feedback_pct = safe_float(listing.get("seller_feedback_pct"), default=None)
+    seller_eligibility = evaluate_seller_eligibility(listing)
+    seller_username = seller_eligibility.username
+    seller_feedback = seller_eligibility.feedback_count
+    seller_feedback_pct = seller_eligibility.feedback_pct
     raw_buying_options = listing.get("buying_options")
     buying_options = (
         "" if _is_missing(raw_buying_options) else normalize(raw_buying_options)
@@ -631,16 +867,43 @@ def analyze_listing(listing: pd.Series, card_values: pd.DataFrame, settings: dic
     offer_compatible = "BEST_OFFER" in buying_option_values
     raw_condition = listing.get("condition")
     condition = "" if _is_missing(raw_condition) else normalize(raw_condition)
+    condition_issue = required_text_issue(raw_condition, "condition")
     item_end_date = normalize(listing.get("item_end_date", ""))
 
     print_run, serial_detected = detect_print_run(title)
 
     is_slab = _is_slab_listing(title, condition)
-    is_bad = contains_term(title, BAD_WORDS)
+    is_non_card_merchandise = has_non_card_merchandise_language(
+        title,
+        condition,
+    )
+    is_choice_listing = has_choice_listing_language(title, condition)
+    is_reprint_custom = has_reprint_custom_language(title, condition)
+    is_break_listing = has_break_listing_language(title, condition)
+    is_bad = (
+        contains_term(title, BAD_WORDS)
+        or is_non_card_merchandise
+        or is_choice_listing
+        or is_reprint_custom
+        or is_break_listing
+        or has_non_actual_or_presale_language(title, condition)
+        or has_randomized_product_language(title, condition)
+        or has_multi_card_listing_language(title, condition)
+        or has_damage_language(title, condition)
+    )
     has_good_words = contains_term(title, GOOD_WORDS)
-    raw_candidate = not is_slab
+    raw_candidate = (
+        not is_slab
+        and not is_non_card_merchandise
+        and not is_choice_listing
+        and not is_reprint_custom
+        and not is_break_listing
+        and not title_issue
+    )
 
     eligibility_flags = []
+    if title_issue:
+        eligibility_flags.append(title_issue)
     if _is_missing(raw_price):
         eligibility_flags.append("missing_price")
     elif parsed_price is None or parsed_price <= 0:
@@ -661,14 +924,28 @@ def analyze_listing(listing: pd.Series, card_values: pd.DataFrame, settings: dic
     elif not buying_option_values.issubset(SUPPORTED_BUYING_OPTIONS):
         eligibility_flags.append("unsupported_buying_option")
 
-    if _is_missing(raw_condition):
-        eligibility_flags.append("missing_condition")
+    if condition_issue:
+        eligibility_flags.append(condition_issue)
+
+    eligibility_flags.extend(seller_eligibility.flags)
 
     eligibility_flags.extend(_modeled_cost_flags(settings))
     listing_eligible = not eligibility_flags and not is_slab
 
     flags = list(eligibility_flags)
     score = 0
+
+    if is_non_card_merchandise:
+        flags.append("non_card_merchandise")
+
+    if is_choice_listing:
+        flags.append("pick_your_card")
+
+    if is_reprint_custom:
+        flags.append("reprint_or_custom")
+
+    if is_break_listing:
+        flags.append("break_listing")
 
     if is_bad:
         flags.append("bad_listing_language")
@@ -705,7 +982,7 @@ def analyze_listing(listing: pd.Series, card_values: pd.DataFrame, settings: dic
     else:
         flags.append("no_print_run_detected")
 
-    if len(title.split()) <= 8:
+    if title and len(title.split()) <= 8:
         flags.append("thin_title_opportunity")
         score += 8
 
@@ -733,6 +1010,12 @@ def analyze_listing(listing: pd.Series, card_values: pd.DataFrame, settings: dic
     psa10_value = None
     gem_rate = None
     psa9_rate = None
+    verification_status = ""
+    verified_at = ""
+    expires_at = ""
+    source_url = ""
+    comp_count = None
+    valuation_notes = ""
 
     best_path = "NONE"
     best_expected_profit = None
@@ -741,15 +1024,30 @@ def analyze_listing(listing: pd.Series, card_values: pd.DataFrame, settings: dic
 
     if card is not None and listing_eligible:
         matched_card = normalize(card.get("keyword"))
-        valuation_notes = normalize(card.get("notes", ""))
-        valuation_is_non_actionable = _valuation_is_non_actionable(valuation_notes)
+        matched_valuation_notes = normalize(card.get("notes", ""))
+        provenance_flags = list(valuation_provenance_flags(card))
+        valuation_is_non_actionable = (
+            _valuation_is_non_actionable(matched_valuation_notes)
+            or bool(provenance_flags)
+        )
 
         if valuation_is_non_actionable:
             flags.append("non_actionable_valuation")
-            if re.search(r"\bexample(?:\s+only)?\b", valuation_notes.lower()):
+            for provenance_flag in provenance_flags:
+                if provenance_flag not in flags:
+                    flags.append(provenance_flag)
+            if re.search(r"\bexample(?:\s+only)?\b", matched_valuation_notes.lower()):
                 flags.append("unverified_example_valuation")
             score -= 60
         else:
+            verification_status = normalize_verification_status(
+                card.get("verification_status")
+            )
+            verified_at = normalize(card.get("verified_at"))
+            expires_at = normalize(card.get("expires_at"))
+            source_url = normalize(card.get("source_url"))
+            comp_count = int(_finite_float(card.get("comp_count")))
+            valuation_notes = matched_valuation_notes
             raw_market_value = safe_float(card.get("raw_market_value"))
             psa9_value = safe_float(card.get("psa9_value"))
             psa10_value = safe_float(card.get("psa10_value"))
@@ -921,6 +1219,13 @@ def analyze_listing(listing: pd.Series, card_values: pd.DataFrame, settings: dic
         psa10_value=psa10_value,
         gem_rate_estimate=gem_rate,
         psa9_rate_estimate=psa9_rate,
+
+        verification_status=verification_status,
+        verified_at=verified_at,
+        expires_at=expires_at,
+        source_url=source_url,
+        comp_count=comp_count,
+        valuation_notes=valuation_notes,
 
         print_run=print_run,
         serial_detected=serial_detected,

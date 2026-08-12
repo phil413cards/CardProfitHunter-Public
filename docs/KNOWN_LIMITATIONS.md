@@ -1,6 +1,6 @@
 # CardProfitHunter Known Limitations
 
-This document describes the known limitations of CardProfitHunter 5.2.3 during the Phase 1 beta. The application provides decision support only and should not be treated as a guarantee of authenticity, condition, grading outcome, sale price, or profit.
+This document describes the known limitations of CardProfitHunter 5.2.40 during the Phase 1 beta. The application provides decision support only and should not be treated as a guarantee of authenticity, condition, grading outcome, sale price, or profit.
 
 ## Essential beta boundaries
 

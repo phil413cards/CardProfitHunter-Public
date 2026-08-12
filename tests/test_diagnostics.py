@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import stat
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,6 +10,7 @@ from unittest.mock import patch
 from diagnostics import (
     ApplicationStartupError,
     LOGGER_NAME,
+    LOGGER_WARNING,
     REDACTED,
     StartupStep,
     build_sanitized_diagnostics,
@@ -166,6 +169,18 @@ class LocalLoggerTests(DiagnosticsTestCase):
                 encoding="utf-8"
             )
 
+            if os.name == "posix":
+                self.assertEqual(
+                    stat.S_IMODE(log_directory.stat().st_mode),
+                    0o700,
+                )
+                self.assertEqual(
+                    stat.S_IMODE(
+                        (log_directory / "application.log").stat().st_mode
+                    ),
+                    0o600,
+                )
+
         self.assertIn("Z level=ERROR", contents)
         self.assertIn("event=SAMPLE_ANALYSIS_FAILED", contents)
         self.assertIn("context=sample.analysis.run", contents)
@@ -189,6 +204,64 @@ class LocalLoggerTests(DiagnosticsTestCase):
             self.assertTrue(first.enabled)
             self.assertTrue(second.enabled)
             self.assertEqual(len(managed_file_handlers), 1)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission modes required")
+    def test_repeated_setup_repairs_private_permissions(self):
+        with TemporaryDirectory() as temp_dir:
+            log_directory = Path(temp_dir) / "logs"
+            first = configure_local_logger(log_directory)
+            log_path = log_directory / "application.log"
+            log_directory.chmod(0o755)
+            log_path.chmod(0o644)
+
+            second = configure_local_logger(log_directory)
+
+            self.assertTrue(first.enabled)
+            self.assertTrue(second.enabled)
+            self.assertEqual(stat.S_IMODE(log_directory.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(log_path.stat().st_mode), 0o600)
+
+    def test_symlink_log_directory_fails_safely(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            external_directory = root / "external"
+            external_directory.mkdir()
+            log_directory = root / "logs"
+            try:
+                log_directory.symlink_to(
+                    external_directory,
+                    target_is_directory=True,
+                )
+            except OSError:
+                self.skipTest("Symlinks are unavailable")
+
+            setup = configure_local_logger(log_directory)
+
+            self.assertFalse(setup.enabled)
+            self.assertEqual(setup.warning, LOGGER_WARNING)
+            self.assertEqual(list(external_directory.iterdir()), [])
+
+    def test_symlink_log_file_fails_without_touching_target(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            log_directory = root / "logs"
+            log_directory.mkdir()
+            external_file = root / "private-target.log"
+            external_file.write_text("private existing content", encoding="utf-8")
+            log_path = log_directory / "application.log"
+            try:
+                log_path.symlink_to(external_file)
+            except OSError:
+                self.skipTest("Symlinks are unavailable")
+
+            setup = configure_local_logger(log_directory)
+
+            self.assertFalse(setup.enabled)
+            self.assertEqual(setup.warning, LOGGER_WARNING)
+            self.assertEqual(
+                external_file.read_text(encoding="utf-8"),
+                "private existing content",
+            )
 
     def test_logger_setup_failure_is_safe_and_nonfatal(self):
         with TemporaryDirectory() as temp_dir:

@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -25,6 +26,15 @@ class V51DashboardTests(unittest.TestCase):
         self.assertIsNone(metrics["best_opportunity"])
 
     def test_latest_batch_metrics_and_current_batch_exclude_watch(self):
+        today = datetime.now(timezone.utc).date()
+        provenance = {
+            "verification_status": "verified",
+            "verified_at": (today - timedelta(days=1)).isoformat(),
+            "expires_at": (today + timedelta(days=30)).isoformat(),
+            "source_url": "https://example.com/verified-comps",
+            "comp_count": 10,
+            "valuation_notes": "Verified comps",
+        }
         frame = pd.DataFrame([
             {
                 "item_id": "1",
@@ -36,6 +46,10 @@ class V51DashboardTests(unittest.TestCase):
                 "best_expected_profit": 50,
                 "best_expected_roi_pct": 50,
                 "suggested_offer": 80,
+                "seller_username": "trusted-seller",
+                "seller_feedback": 100,
+                "seller_feedback_pct": 99.0,
+                **provenance,
             },
             {
                 "item_id": "2",

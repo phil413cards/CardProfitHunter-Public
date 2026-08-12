@@ -4,6 +4,9 @@ from typing import Any
 
 import pandas as pd
 
+from listing_classifier import ACTIONABLE_CLASSES, classify_listing
+from text_safety import required_text_issue, safe_text
+
 
 ACTION_PRIORITY = {
     "BUY_GRADE_PSA": 4,
@@ -152,11 +155,20 @@ def is_unverified_scout_candidate(
         return False
     if not _truthy(row.get("grading_candidate")):
         return False
-    if str(row.get("listing_listing_class", "")) not in {
-        "RAW_SINGLE_CARD",
-        "RAW_PARALLEL",
-        "RAW_AUTOGRAPH",
-    }:
+    raw_title = row.get("title", "")
+    raw_condition = row.get("condition", "")
+    if required_text_issue(raw_title, "title"):
+        return False
+    if required_text_issue(raw_condition, "condition"):
+        return False
+    title = safe_text(raw_title)
+    condition = safe_text(raw_condition)
+    current_classification = classify_listing(title, condition)
+    if not current_classification.actionable:
+        return False
+    if current_classification.listing_class not in ACTIONABLE_CLASSES:
+        return False
+    if str(row.get("listing_listing_class", "")) not in ACTIONABLE_CLASSES:
         return False
     return calculate_scout_score(row) >= int(minimum_scout_score)
 

@@ -1,4 +1,9 @@
+import json
+import os
+import stat
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import call, patch
 
 import pandas as pd
@@ -308,6 +313,24 @@ class EbayClientTests(unittest.TestCase):
         token_get.assert_not_called()
         request_get.assert_not_called()
 
+    def test_credentials_default_to_sandbox_and_require_explicit_production(self):
+        sandbox_credentials = ebay_client.EbayCredentials(
+            "test-client-id",
+            "test-client-secret",
+        )
+        production_credentials = ebay_client.EbayCredentials(
+            "test-client-id",
+            "test-client-secret",
+            environment="production",
+        )
+
+        self.assertEqual(sandbox_credentials.environment, "sandbox")
+        self.assertEqual(production_credentials.environment, "production")
+        sandbox_urls = ebay_client._base_urls(sandbox_credentials.environment)
+        production_urls = ebay_client._base_urls(production_credentials.environment)
+        self.assertTrue(all("sandbox" in url for url in sandbox_urls))
+        self.assertTrue(all("sandbox" not in url for url in production_urls))
+
     def test_empty_null_and_missing_item_summaries_are_valid(self):
         cases = [
             ("empty", {"itemSummaries": []}),
@@ -402,6 +425,145 @@ class EbayClientTests(unittest.TestCase):
             tuple(frame.columns),
             ebay_client.NORMALIZED_EBAY_COLUMNS,
         )
+
+
+class TokenCacheSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        self.cache_dir = Path(self.temporary_directory.name) / ".cache"
+        self.token_cache = self.cache_dir / "ebay_token.json"
+        self.real_token_cache = ebay_client.TOKEN_CACHE
+
+        cache_dir_patch = patch.object(ebay_client, "CACHE_DIR", self.cache_dir)
+        token_cache_patch = patch.object(
+            ebay_client,
+            "TOKEN_CACHE",
+            self.token_cache,
+        )
+        cache_dir_patch.start()
+        token_cache_patch.start()
+        self.addCleanup(cache_dir_patch.stop)
+        self.addCleanup(token_cache_patch.stop)
+
+    def mode(self, path):
+        return stat.S_IMODE(path.stat().st_mode)
+
+    def test_uses_only_patched_temporary_cache_paths(self):
+        self.assertNotEqual(self.token_cache, self.real_token_cache)
+        self.assertFalse(self.real_token_cache.is_relative_to(self.cache_dir))
+
+    def test_cache_write_is_atomic_and_private(self):
+        with patch.object(
+            ebay_client.os,
+            "replace",
+            wraps=os.replace,
+        ) as replace:
+            ebay_client._write_cached_token(
+                "sandbox",
+                "test-client-id",
+                "test-access-token",
+                3600,
+            )
+
+        replace.assert_called_once()
+        self.assertEqual(self.mode(self.cache_dir), 0o700)
+        self.assertEqual(self.mode(self.token_cache), 0o600)
+        payload = json.loads(self.token_cache.read_text(encoding="utf-8"))
+        self.assertEqual(payload["environment"], "sandbox")
+        self.assertEqual(payload["client_id"], "test-client-id")
+        self.assertEqual(payload["access_token"], "test-access-token")
+        self.assertEqual(list(self.cache_dir.glob("*.tmp")), [])
+
+    def test_cache_read_repairs_overly_broad_permissions(self):
+        ebay_client._write_cached_token(
+            "sandbox",
+            "test-client-id",
+            "test-access-token",
+            3600,
+        )
+        self.cache_dir.chmod(0o755)
+        self.token_cache.chmod(0o644)
+
+        token = ebay_client._read_cached_token("sandbox", "test-client-id")
+
+        self.assertEqual(token, "test-access-token")
+        self.assertEqual(self.mode(self.cache_dir), 0o700)
+        self.assertEqual(self.mode(self.token_cache), 0o600)
+
+    def test_malformed_cache_payloads_are_ignored(self):
+        self.cache_dir.mkdir(mode=0o700)
+        cases = (
+            ("not an object", []),
+            ("missing token", {"environment": "sandbox"}),
+            (
+                "nonstr token",
+                {
+                    "environment": "sandbox",
+                    "client_id": "test-client-id",
+                    "access_token": ["not", "text"],
+                    "expires_at": ebay_client.time.time() + 3600,
+                },
+            ),
+        )
+
+        for name, payload in cases:
+            with self.subTest(name=name):
+                self.token_cache.write_text(json.dumps(payload), encoding="utf-8")
+                self.token_cache.chmod(0o600)
+                self.assertIsNone(
+                    ebay_client._read_cached_token("sandbox", "test-client-id")
+                )
+
+    def test_failed_atomic_replace_keeps_old_cache_and_removes_temporary_file(self):
+        ebay_client._write_cached_token(
+            "sandbox",
+            "test-client-id",
+            "old-test-token",
+            3600,
+        )
+
+        with patch.object(
+            ebay_client.os,
+            "replace",
+            side_effect=OSError("private token cache path"),
+        ):
+            with self.assertRaisesRegex(
+                ebay_client.EbayApiError,
+                "Unable to secure the local eBay token cache",
+            ) as raised:
+                ebay_client._write_cached_token(
+                    "sandbox",
+                    "test-client-id",
+                    "new-test-token",
+                    3600,
+                )
+
+        message = str(raised.exception)
+        self.assertNotIn("private", message)
+        self.assertNotIn("path", message)
+        payload = json.loads(self.token_cache.read_text(encoding="utf-8"))
+        self.assertEqual(payload["access_token"], "old-test-token")
+        self.assertEqual(list(self.cache_dir.glob("*.tmp")), [])
+
+    def test_symlink_cache_directory_fails_safely(self):
+        target = Path(self.temporary_directory.name) / "cache-target"
+        target.mkdir()
+        self.cache_dir.symlink_to(target, target_is_directory=True)
+
+        with self.assertRaisesRegex(
+            ebay_client.EbayApiError,
+            "Unable to secure the local eBay token cache",
+        ) as raised:
+            ebay_client._write_cached_token(
+                "sandbox",
+                "test-client-id",
+                "test-access-token",
+                3600,
+            )
+
+        self.assertNotIn(str(target), str(raised.exception))
+        self.assertEqual(list(target.iterdir()), [])
 
 
 if __name__ == "__main__":

@@ -62,6 +62,25 @@ class AppInputValidationWiringTests(unittest.TestCase):
         block = _button_block(self.tree, "Run Daily Buy Board")
         self.assert_call_precedes(block, "validate_search_inputs", "search_ebay")
 
+    def test_csv_uploads_use_the_explicit_local_demo_size_limit(self):
+        upload_calls = [
+            node
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "file_uploader"
+        ]
+
+        self.assertEqual(len(upload_calls), 2)
+        for call in upload_calls:
+            limit = next(
+                keyword.value
+                for keyword in call.keywords
+                if keyword.arg == "max_upload_size"
+            )
+            self.assertIsInstance(limit, ast.Name)
+            self.assertEqual(limit.id, "MAX_CSV_UPLOAD_MB")
+
     def test_app_is_inspected_without_importing_it(self):
         self.assertNotIn("app", globals())
 
