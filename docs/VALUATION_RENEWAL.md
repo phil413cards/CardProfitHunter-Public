@@ -19,6 +19,17 @@ The command reads the valuation CSV, validates its schema, and prints aggregate
 counts plus the rows requiring review. It does not call eBay, write the
 valuation file, touch SQLite, or create output files.
 
+Continuous integration uses the same read-only audit as a release gate:
+
+```bash
+python scripts/audit_valuations.py --fail-on-blocking
+```
+
+This mode exits unsuccessfully when a verified valuation is expired or has
+missing or invalid provenance. Valuations that are merely due soon remain a
+visible warning and do not fail the check. Demonstration and example-only rows
+remain non-actionable and do not fail the check.
+
 For each due or expired row:
 
 1. Confirm the exact year, set, card number, player, parallel, variant, and

@@ -12,6 +12,7 @@ The workflow:
 - runs the canonical test command with bytecode generation disabled
 - checks whitespace with `git diff --check`
 - fails if a private runtime artifact is tracked
+- fails if a verified valuation is expired or has missing or invalid provenance
 
 The tracked-artifact guard covers local environment files other than
 `.env.example`, virtual environments, Python and test caches, SQLite files,
@@ -25,6 +26,7 @@ Run the same controls locally with:
 
 ```bash
 python scripts/check_tracked_artifacts.py
+python scripts/audit_valuations.py --fail-on-blocking
 PYTHONDONTWRITEBYTECODE=1 python -B -m unittest discover -s tests -v
 git diff --check
 ```
