@@ -37,6 +37,9 @@ NON_CARD_TERMS = (
     "Wrapper Only",
     "Empty Packaging",
     "Packaging Only",
+    "Package Only No Cards",
+    "Original Package Only - No Card",
+    "No Cards",
     "Card Grading Service",
     "Card Cleaning Service",
     "Card Authentication Service",
@@ -55,6 +58,8 @@ SAFE_CARD_TERMS = (
     "One Touch Included",
     "Card In Magnetic Holder",
     "Protective Case Included",
+    "No Card Number Listed",
+    "Original Package Included",
 )
 
 
