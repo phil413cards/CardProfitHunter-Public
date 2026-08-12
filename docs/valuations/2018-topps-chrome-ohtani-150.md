@@ -1,13 +1,13 @@
 # 2018 Topps Chrome Shohei Ohtani #150 valuation
 
-Reviewed: 2026-08-09 UTC
-Revalidate by: 2026-09-08 UTC
+Reviewed: 2026-08-12 UTC
+Revalidate by: 2026-09-11 UTC
 
 Structured valuation metadata:
 
 - Verification status: `verified`
-- Verified at: `2026-08-09`
-- Expires at: `2026-09-08`
+- Verified at: `2026-08-12`
+- Expires at: `2026-09-11`
 - Primary source: [SportsCardsPro sold-sales tracker](https://www.sportscardspro.com/game/baseball-cards-2018-topps-chrome/shohei-ohtani-150)
 - Exact-card comp count reviewed: 30
 
@@ -22,6 +22,7 @@ Structured valuation metadata:
 ## Evidence
 
 - [SportsCardsPro sold-sales tracker](https://www.sportscardspro.com/game/baseball-cards-2018-topps-chrome/shohei-ohtani-150) showed 30 recent sold entries in each of the ungraded, grade-9, and PSA-10 sections when reviewed.
+- On 2026-08-12, the tracker reported headline estimates of $819.72 ungraded, $767.50 grade 9, and $1,775 PSA 10; the existing rounded values remain below those estimates.
 - [PSA CardFacts](https://www.psacard.com/cardfacts/baseball-cards/2018-topps-chrome/shohei-ohtani-pitching-150/675666) independently confirms the exact year, set, player, card number, PSA populations, and recent PSA sales.
 - Recent exact-looking raw sales were generally around $500-$850, with higher outliers. Titles indicating a slab, uncertain grade claim, or a different parallel were excluded.
 - Recent exact PSA 9 sales were generally around $600-$855.
@@ -31,9 +32,9 @@ Structured valuation metadata:
 
 | Field | Value | Rationale |
 | --- | ---: | --- |
-| Raw market value | $650 | Conservative rounded value within the recent raw cluster |
-| PSA 9 value | $700 | Conservative rounded value near the recent PSA 9 center |
-| PSA 10 value | $1,600 | Conservative rounded value near recent exact sales |
+| Raw market value | $650 | Conservative rounded value below the current tracker estimate |
+| PSA 9 value | $700 | Conservative rounded value below the current tracker estimate |
+| PSA 10 value | $1,600 | Conservative rounded value below the current tracker estimate |
 | Gem-rate estimate | 0 | Disabled; sold prices do not establish a raw card's grading probability |
 | PSA-9-rate estimate | 0 | Disabled; sold prices do not establish a raw card's grading probability |
 

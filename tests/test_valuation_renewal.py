@@ -127,7 +127,7 @@ class ValuationRenewalReportTests(unittest.TestCase):
         bundled = pd.read_csv(ROOT / "sample_data" / "card_values.csv")
         report = build_valuation_renewal_report(
             bundled,
-            as_of=AS_OF,
+            as_of=date(2026, 8, 12),
             renewal_window_days=30,
         )
         summary = summarize_valuation_renewal(report)

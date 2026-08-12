@@ -62,8 +62,8 @@ class VerifiedValuationPilotTests(unittest.TestCase):
         pilot = self.pilot_values.iloc[0]
 
         self.assertEqual(pilot["verification_status"], "verified")
-        self.assertEqual(pilot["verified_at"], "2026-08-09")
-        self.assertEqual(pilot["expires_at"], "2026-09-08")
+        self.assertEqual(pilot["verified_at"], "2026-08-12")
+        self.assertEqual(pilot["expires_at"], "2026-09-11")
         self.assertTrue(str(pilot["source_url"]).startswith("https://"))
         self.assertGreater(int(pilot["comp_count"]), 0)
 
@@ -71,11 +71,11 @@ class VerifiedValuationPilotTests(unittest.TestCase):
         pilot = self.pilot_values.iloc[0]
 
         self.assertEqual(
-            valuation_provenance_flags(pilot, as_of=date(2026, 9, 8)),
+            valuation_provenance_flags(pilot, as_of=date(2026, 9, 11)),
             (),
         )
         self.assertEqual(
-            valuation_provenance_flags(pilot, as_of=date(2026, 9, 9)),
+            valuation_provenance_flags(pilot, as_of=date(2026, 9, 12)),
             ("expired_valuation",),
         )
 

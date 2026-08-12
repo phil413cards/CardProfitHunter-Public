@@ -109,8 +109,8 @@ class VerifiedValuationBatch2Tests(unittest.TestCase):
             row = self.valuation_rows(expected["keyword"]).iloc[0]
             with self.subTest(keyword=expected["keyword"]):
                 self.assertEqual(row["verification_status"], "verified")
-                self.assertEqual(row["verified_at"], "2026-08-09")
-                self.assertEqual(row["expires_at"], "2026-09-08")
+                self.assertEqual(row["verified_at"], "2026-08-12")
+                self.assertEqual(row["expires_at"], "2026-09-11")
                 self.assertEqual(row["source_url"], expected["source_url"])
                 self.assertEqual(int(row["comp_count"]), 30)
                 self.assertEqual(
@@ -130,11 +130,11 @@ class VerifiedValuationBatch2Tests(unittest.TestCase):
             row = self.valuation_rows(expected["keyword"]).iloc[0]
             with self.subTest(keyword=expected["keyword"]):
                 self.assertEqual(
-                    valuation_provenance_flags(row, as_of=date(2026, 9, 8)),
+                    valuation_provenance_flags(row, as_of=date(2026, 9, 11)),
                     (),
                 )
                 self.assertEqual(
-                    valuation_provenance_flags(row, as_of=date(2026, 9, 9)),
+                    valuation_provenance_flags(row, as_of=date(2026, 9, 12)),
                     ("expired_valuation",),
                 )
 
