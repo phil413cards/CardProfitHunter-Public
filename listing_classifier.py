@@ -61,13 +61,17 @@ HARD_NON_CARD_PATTERNS = (
     r"\b(?:lot|pack|bundle|case|box)\s+of\s+(?:\d+\s+)?"
     r"(?:toploaders?|top loaders?|penny sleeves|card sleeves)\b",
     r"\bempty\s+(?:wrappers?|packaging)\b",
-    r"\b(?:wrappers?|packaging|labels?|coa)\s+only\b",
+    r"\b(?:wrappers?|packages?|packaging|labels?|coa)\s+only\b",
     r"\b(?:cards?\s+not|no\s+(?:actual\s+)?cards?)\s+included\b",
     r"\bwithout\s+(?:an?\s+)?(?:actual\s+)?cards?\b",
     r"\b(?:card|autograph)\s+"
     r"(?:grading|cleaning|authentication|restoration|consignment|submission)\s+"
     r"services?\b",
     r"\breplacement\s+(?:slab\s+)?labels?\b",
+)
+
+NO_CARD_TITLE_PATTERNS = (
+    r"\bno\s+(?:actual\s+)?cards?\s*$",
 )
 
 STRONG_NON_CARD_OBJECT_PATTERNS = (
@@ -508,7 +512,10 @@ def has_trading_card_evidence(title: Any, condition: Any = "") -> bool:
 
 def has_non_card_merchandise_language(title: Any, condition: Any = "") -> bool:
     """Return whether listing text identifies merchandise instead of a card."""
-    return _is_non_card_merchandise(_combined_text(title, condition))
+    return _is_non_card_merchandise(_combined_text(title, condition)) or _has(
+        _normalized(title),
+        NO_CARD_TITLE_PATTERNS,
+    )
 
 
 def has_non_actual_or_presale_language(
