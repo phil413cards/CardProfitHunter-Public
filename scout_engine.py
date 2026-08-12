@@ -10,6 +10,7 @@ from listing_classifier import UNKNOWN, classify_listing
 from market_intelligence import build_market_context
 from profit_engine import analyze_listings
 from recommendation_engine import rank_recommendations
+from search_relevance import query_identity_issue
 from text_safety import required_text_issue, safe_text
 
 
@@ -38,6 +39,7 @@ def enrich_listings(listings: pd.DataFrame, query: str) -> pd.DataFrame:
                 exclusion_reason=text_issue,
             )
         identity = parse_card_identity(title, query)
+        identity_issue = query_identity_issue(title, query)
         grading = estimate_grading_candidate(
             title,
             condition,
@@ -58,6 +60,8 @@ def enrich_listings(listings: pd.DataFrame, query: str) -> pd.DataFrame:
             }
         )
         enriched.update(grading.to_dict())
+        enriched["query_identity_match"] = identity_issue is None
+        enriched["query_identity_issue"] = identity_issue or ""
         rows.append(enriched)
 
     return pd.DataFrame(rows)
@@ -82,6 +86,8 @@ def _merge_metadata(
         "parsed_print_run",
         "parsed_autograph",
         "parsed_rookie",
+        "query_identity_match",
+        "query_identity_issue",
         "grading_candidate",
         "grading_signal_score",
         "confidence",
