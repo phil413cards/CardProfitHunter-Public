@@ -1,4 +1,4 @@
-# CardProfitHunter 5.2.42
+# CardProfitHunter 5.2.43
 
 CardProfitHunter is a Python/Streamlit application for finding and evaluating sports-card listings from eBay. It normalizes Browse API results, applies conservative card-identity matching, models raw-flip and PSA-grading economics, and stores local searches, run outcomes, and opportunity snapshots in SQLite.
 
@@ -102,6 +102,22 @@ Financial valuation rows must include structured provenance: `verification_statu
 
 Profit, ROI, max-buy, and suggested-offer calculations use the same total-modeled-cost assumptions, including purchase tax, promoted-listing fees, expected return/defect loss, and grading loss risk. Review the configurable defaults and formulas in `docs/PROFIT_MODEL.md` before acting on any result.
 
+## Beta decision-quality review
+
+Use `docs/BETA_DECISION_QUALITY.md` to record manually reviewed beta evidence in
+an ignored local CSV. The read-only summarizer reports false positives, false
+negatives, identity errors, money-model concerns, and usefulness without
+printing listing references or notes:
+
+```bash
+python scripts/summarize_beta_review.py \
+  --input output/beta_reviews/session-YYYY-MM-DD.csv
+```
+
+The summary is evidence for investigation, not a guarantee or an automatic
+launch decision. Completed review files can contain private listing context and
+must remain under ignored `output/` storage.
+
 ## Local database recovery
 
 The Setup tab can create, verify, and restore full SQLite backups under `output/database_backups/`. Restore accepts only a local backup with a valid integrity check, the supported schema version, the required tables and columns, and no foreign-key violations. It requires both explicit verification and confirmation, then creates a separate safety backup of the current database before atomically replacing it. No backup or restore runs automatically.
@@ -115,6 +131,7 @@ There is no separate build step or package artifact for this local baseline. See
 ## Phase 1 beta
 
 - [Phase 1 Beta Guide](docs/PHASE_1_BETA_GUIDE.md)
+- [Beta Decision-Quality Workflow](docs/BETA_DECISION_QUALITY.md)
 - [Feedback Template](docs/FEEDBACK_TEMPLATE.md)
 - [Known Limitations](docs/KNOWN_LIMITATIONS.md)
 
