@@ -155,6 +155,11 @@ def is_unverified_scout_candidate(
         return False
     if not _truthy(row.get("grading_candidate")):
         return False
+    if (
+        "query_identity_match" in row.index
+        and not _truthy(row.get("query_identity_match"))
+    ):
+        return False
     raw_title = row.get("title", "")
     raw_condition = row.get("condition", "")
     if required_text_issue(raw_title, "title"):

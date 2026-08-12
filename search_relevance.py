@@ -4,6 +4,7 @@ import re
 import unicodedata
 from typing import Any
 
+from card_parser import parse_card_identity
 from listing_classifier import (
     BOX_BREAK,
     CONDITION_AMBIGUOUS,
@@ -141,6 +142,36 @@ def _looks_like_person_name(tokens: list[str]) -> bool:
     )
 
 
+def query_identity_issue(title: str, query: str) -> str | None:
+    """Return a stable reason when a listing misses explicit query identity."""
+    query_identity = parse_card_identity(query, query)
+    listing_identity = parse_card_identity(title, query)
+
+    for field, label in (
+        ("year", "year"),
+        ("manufacturer", "manufacturer"),
+        ("product", "product"),
+        ("card_number", "card_number"),
+        ("parallel", "parallel"),
+    ):
+        expected = getattr(query_identity, field)
+        if expected in {None, ""}:
+            continue
+
+        actual = getattr(listing_identity, field)
+        if actual in {None, ""}:
+            return f"query_identity_missing_{label}"
+        if str(actual).casefold() != str(expected).casefold():
+            return f"query_identity_conflict_{label}"
+
+    if query_identity.rookie and not listing_identity.rookie:
+        return "query_identity_missing_rookie"
+    if query_identity.autograph and not listing_identity.autograph:
+        return "query_identity_missing_autograph"
+
+    return None
+
+
 def score_search_result(title: str, query: str) -> float:
     normalized_title = normalize_text(title)
     normalized_query = normalize_text(query)
@@ -150,6 +181,8 @@ def score_search_result(title: str, query: str) -> float:
         return 0.0
 
     if excluded_listing_reason(title, query):
+        return 0.0
+    if query_identity_issue(title, query):
         return 0.0
 
     title_tokens = set(normalized_title.split())
@@ -180,6 +213,8 @@ def is_relevant_search_result(
         return False
 
     if excluded_listing_reason(title, query):
+        return False
+    if query_identity_issue(title, query):
         return False
 
     normalized_title_tokens = set(normalize_text(title).split())
