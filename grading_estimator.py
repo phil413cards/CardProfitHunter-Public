@@ -6,6 +6,7 @@ from typing import Any
 
 from card_parser import CardIdentity
 from listing_classifier import ListingClassification
+from text_safety import safe_text
 
 
 @dataclass(frozen=True)
@@ -28,7 +29,7 @@ def estimate_grading_candidate(
     classification: ListingClassification,
     identity: CardIdentity,
 ) -> GradingEstimate:
-    text = f"{title} {condition}".lower()
+    text = f"{safe_text(title)} {safe_text(condition)}".lower()
     reasons: list[str] = []
     score = 0
 

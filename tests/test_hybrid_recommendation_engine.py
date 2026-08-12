@@ -27,6 +27,7 @@ def candidate_row(**overrides):
         "best_expected_roi_pct": None,
         "total_score": 20,
         "title": "Shohei Ohtani Refractor /99",
+        "condition": "Ungraded",
     }
     row.update(overrides)
     return pd.Series(row)

@@ -1,5 +1,9 @@
 {
   "ebay_fee_pct": 0.1325,
+  "purchase_tax_pct": 0.1,
+  "promoted_listing_fee_pct": 0.05,
+  "return_defect_allowance_pct": 0.05,
+  "grading_loss_risk_pct": 0.01,
   "raw_flip_shipping_allowance": 6.0,
   "psa_grading_fee": 25.0,
   "psa_shipping_insurance_allowance": 12.0,

@@ -1,4 +1,5 @@
 import unittest
+from datetime import date, timedelta
 
 import pandas as pd
 
@@ -8,6 +9,10 @@ from profit_engine import analyze_listing, find_best_card_value
 def settings(raw_only=True):
     return {
         "ebay_fee_pct": 0.1325,
+        "purchase_tax_pct": 0.10,
+        "promoted_listing_fee_pct": 0.05,
+        "return_defect_allowance_pct": 0.05,
+        "grading_loss_risk_pct": 0.01,
         "raw_flip_shipping_allowance": 6.0,
         "psa_grading_fee": 25.0,
         "psa_shipping_insurance_allowance": 12.0,
@@ -33,6 +38,11 @@ def values(*keywords, notes="Verified comps"):
             "psa10_value": 1100,
             "gem_rate_estimate": 0.55,
             "psa9_rate_estimate": 0.35,
+            "verification_status": "verified",
+            "verified_at": (date.today() - timedelta(days=1)).isoformat(),
+            "expires_at": (date.today() + timedelta(days=30)).isoformat(),
+            "source_url": "https://example.com/verified-comps",
+            "comp_count": 10,
             "notes": notes,
         }
         for keyword in keywords
@@ -222,6 +232,20 @@ class CardIdentityAccuracyTests(unittest.TestCase):
         for name, title, expected_flag in cases:
             with self.subTest(name=name):
                 self.assert_non_actionable(title, card_values, expected_flag)
+
+    def test_closest_rejection_reason_wins_without_a_qualified_match(self):
+        card_values = values(
+            "2018 Topps Chrome Shohei Ohtani #150 Refractor Rookie "
+            "Pitching Angels",
+            "Shohei Ohtani Topps Chrome Refractor",
+        )
+
+        self.assert_non_actionable(
+            "2018 Topps Chrome Shohei Ohtani #150 Sepia Refractor Rookie "
+            "Pitching Angels",
+            card_values,
+            "card_identity_conflict_parallel",
+        )
 
     def test_alternate_year_and_card_number_conflicts_are_non_actionable(self):
         cases = [

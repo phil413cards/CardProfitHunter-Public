@@ -5,11 +5,21 @@ import unicodedata
 from typing import Any
 
 from listing_classifier import (
+    BOX_BREAK,
     CONDITION_AMBIGUOUS,
+    DAMAGED_CARD,
     MULTI_CARD_LISTING,
+    NON_ACTUAL_OR_PRESALE,
     NON_CARD_MERCHANDISE,
+    PICK_YOUR_CARD,
+    RANDOMIZED_PRODUCT,
+    REDEMPTION_LISTING,
+    REPRINT_CUSTOM,
+    SEALED_PRODUCT,
+    UNKNOWN,
     classify_listing,
 )
+from text_safety import safe_text
 
 
 EXCLUDED_PHRASES = (
@@ -55,7 +65,7 @@ NAME_SUFFIXES = {
 
 
 def normalize_text(value: Any) -> str:
-    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = unicodedata.normalize("NFKD", safe_text(value))
     text = "".join(
         character
         for character in text
@@ -94,10 +104,20 @@ def excluded_listing_reason(
     normalized_query = normalize_text(query)
 
     classification = classify_listing(title)
+    if classification.listing_class == PICK_YOUR_CARD:
+        return "pick your card"
     if classification.listing_class in {
+        BOX_BREAK,
         NON_CARD_MERCHANDISE,
         MULTI_CARD_LISTING,
+        NON_ACTUAL_OR_PRESALE,
+        RANDOMIZED_PRODUCT,
+        REDEMPTION_LISTING,
+        REPRINT_CUSTOM,
+        DAMAGED_CARD,
+        SEALED_PRODUCT,
         CONDITION_AMBIGUOUS,
+        UNKNOWN,
     }:
         return (
             classification.exclusion_reason

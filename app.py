@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -19,13 +18,18 @@ from diagnostics import (
     run_startup_steps,
     startup_failure_diagnostics,
 )
-from csv_export_safety import dataframe_to_spreadsheet_safe_csv
+from csv_export_safety import (
+    dataframe_to_spreadsheet_safe_csv,
+    write_dataframe_spreadsheet_safe_csv,
+)
 from database import (
     DB_PATH, SCHEMA_VERSION, DatabaseMaintenanceError, add_watchlist_row, apply_history_retention,
     create_database_backup, dashboard_metrics, delete_saved_search, delete_watchlist_item, init_db,
+    inspect_database_backup,
     latest_batch_summary, latest_opportunities, latest_batch_metrics, latest_batch_opportunities,
     preview_history_retention, recent_activity, list_saved_searches, list_search_runs, list_watchlist,
-    log_search_run, save_opportunity_batch, save_search,
+    log_search_run, restore_database_backup, save_opportunity_batch,
+    save_opportunity_batch_outcome, save_search,
 )
 from ebay_client import (
     EbayApiError,
@@ -36,13 +40,18 @@ from ebay_client import (
 )
 from input_validation import (
     InputValidationError,
+    MAX_CSV_UPLOAD_MB,
     load_listing_csv,
     load_settings_file,
     load_valuation_csv,
     validate_search_inputs,
-    validate_settings,
     validate_valuation_frame,
 )
+from local_file_persistence import (
+    save_settings_atomically,
+    save_valuation_frame_atomically,
+)
+from local_runtime_security import secure_optional_private_file
 from profit_engine import analyze_listings
 from search_relevance import filter_search_results
 from scout_engine import run_scout_engine
@@ -54,6 +63,10 @@ from search_workflows import (
     empty_analysis_frame,
     stable_analysis_frame,
 )
+from valuation_renewal import (
+    build_valuation_renewal_report,
+    summarize_valuation_renewal,
+)
 
 ROOT = Path(__file__).resolve().parent
 SETTINGS_PATH = ROOT / "config" / "settings.json"
@@ -63,19 +76,21 @@ OUTPUT_DIR = ROOT / "output"
 DATABASE_BACKUP_DIR = OUTPUT_DIR / "database_backups"
 DIAGNOSTIC_LOG_DIR = OUTPUT_DIR / "logs"
 VERSION_PATH = ROOT / "VERSION"
+ENV_PATH = ROOT / ".env"
 
 
-def load_display_version() -> str:
+def read_application_version() -> str:
     try:
         version = VERSION_PATH.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeError):
-        return "unknown"
-    return version or "unknown"
+        return "Unknown"
+    return version or "Unknown"
 
 
-APP_VERSION = load_display_version()
+APPLICATION_VERSION = read_application_version()
+
 st.set_page_config(
-    page_title=f"Card Profit Hunter V{APP_VERSION}",
+    page_title=f"CardProfitHunter {APPLICATION_VERSION}",
     page_icon="📈",
     layout="wide",
 )
@@ -87,23 +102,43 @@ def load_settings() -> dict:
     return load_settings_file(SETTINGS_PATH)
 
 
+def load_local_environment() -> bool:
+    secure_optional_private_file(ENV_PATH)
+    return load_dotenv(ENV_PATH)
+
+
 def save_settings(settings: dict) -> None:
-    validated = validate_settings(settings)
-    SETTINGS_PATH.write_text(json.dumps(validated, indent=2), encoding="utf-8")
+    save_settings_atomically(SETTINGS_PATH, settings)
 
 
 def save_output(df: pd.DataFrame, filename: str) -> Path:
-    OUTPUT_DIR.mkdir(exist_ok=True)
     path = OUTPUT_DIR / filename
-    dataframe_to_spreadsheet_safe_csv(df, path)
-    return path
+    return write_dataframe_spreadsheet_safe_csv(df, path)
 
 
 def valuation_data_warning(values: pd.DataFrame) -> None:
-    if "notes" in values.columns and values["notes"].fillna("").str.contains("example only", case=False).any():
+    renewal_report = build_valuation_renewal_report(values)
+    freshness = renewal_report["freshness_status"]
+    renewal_summary = summarize_valuation_renewal(renewal_report)
+    if freshness.eq("Non-actionable").any():
+        st.warning(
+            "Demonstration and unverified card values are blocked from generating "
+            "BUY or OFFER recommendations."
+        )
+    if renewal_summary["due_soon"]:
+        due_soon_count = renewal_summary["due_soon"]
+        valuation_noun = "valuation" if due_soon_count == 1 else "valuations"
+        st.warning(
+            f"{due_soon_count} verified card {valuation_noun} expire within 30 days. "
+            "Review current exact-card sold comparables before their expiry dates."
+        )
+    blocked_freshness = freshness.isin(
+        {"Expired", "Missing provenance", "Invalid provenance"}
+    )
+    if blocked_freshness.any():
         st.error(
-            "Bundled card values are demonstration data only. They are now blocked from generating "
-            "BUY or OFFER recommendations. Replace them with verified sold-comparable values in the Card Values tab."
+            "One or more card valuations are expired or lack valid provenance. "
+            "They remain non-actionable until reviewed in the Card Values tab."
         )
 
 def metrics_block(df: pd.DataFrame) -> None:
@@ -219,7 +254,7 @@ def show_run_outcome(label: str, outcome: RunOutcome) -> None:
         st.warning("Search failures:\n- " + "\n- ".join(outcome.errors))
 
 
-st.title(f"Card Profit Hunter V{APP_VERSION} Professional Edition")
+st.title(f"CardProfitHunter {APPLICATION_VERSION}")
 st.caption("Executive Dashboard • Daily Buy Board • Live eBay sourcing • Opportunity history")
 if logger_setup.warning:
     st.warning(logger_setup.warning)
@@ -229,7 +264,7 @@ try:
             "environment",
             "STARTUP_ENVIRONMENT",
             "Local environment configuration could not be loaded.",
-            lambda: load_dotenv(ROOT / ".env"),
+            load_local_environment,
         ),
         StartupStep(
             "database",
@@ -312,6 +347,10 @@ with st.sidebar:
     st.divider(); st.header("Profit Settings")
     fields = [
         ("ebay_fee_pct", "eBay fee %", 0.0, 0.30, 0.0025, "%.4f"),
+        ("purchase_tax_pct", "Purchase tax %", 0.0, 0.30, 0.0025, "%.4f"),
+        ("promoted_listing_fee_pct", "Promoted listing fee %", 0.0, 0.50, 0.0025, "%.4f"),
+        ("return_defect_allowance_pct", "Return/defect allowance %", 0.0, 0.50, 0.0025, "%.4f"),
+        ("grading_loss_risk_pct", "Grading loss risk %", 0.0, 0.25, 0.0025, "%.4f"),
         ("raw_flip_shipping_allowance", "Raw flip shipping/supplies", 0.0, None, 1.0, None),
         ("psa_grading_fee", "PSA grading fee", 0.0, None, 1.0, None),
         ("psa_shipping_insurance_allowance", "PSA shipping/insurance", 0.0, None, 1.0, None),
@@ -321,6 +360,10 @@ with st.sidebar:
         ("minimum_psa_expected_profit", "Minimum PSA profit", 0.0, None, 5.0, None),
         ("minimum_psa_expected_roi_pct", "Minimum PSA ROI %", 0.0, None, 5.0, None),
     ]
+    st.caption(
+        "Rates are decimal expected-cost assumptions: 0.10 means 10%. "
+        "Use your actual tax and selling history when available."
+    )
     for key, label, minv, maxv, step, fmt in fields:
         kwargs = dict(min_value=minv, value=float(settings.get(key, 0)), step=step)
         if maxv is not None: kwargs["max_value"] = maxv
@@ -362,6 +405,20 @@ with dashboard_tab:
     c3.metric("Potential Profit", f"${kpis['potential_profit']:,.2f}")
     c4.metric("Average ROI", f"{kpis['average_roi_pct']:.1f}%")
     c5.metric("Highest Score", f"{kpis['highest_score']:.1f}")
+
+    if kpis["status"] == "failed":
+        st.error(
+            "The latest Daily Buy Board run failed. Prior opportunities are not "
+            "shown as current."
+        )
+    elif kpis["status"] == "empty":
+        st.info("The latest Daily Buy Board run completed with no listings.")
+    elif kpis["status"] == "partial":
+        st.warning(
+            "The latest Daily Buy Board run was partial: "
+            f"{kpis['successful_count']} searches succeeded and "
+            f"{kpis['failed_count']} failed."
+        )
 
     best = kpis.get("best_opportunity")
     if best:
@@ -415,14 +472,6 @@ with dashboard_tab:
     s3.metric("All Search Runs", m["search_runs"])
     s4.metric("Stored Opportunities", m["opportunities"])
 
-    p1, p2 = st.columns(2)
-    with p1:
-        st.markdown("#### Inventory Manager")
-        st.info("Inventory and cost-basis tracking is planned for a future release.")
-    with p2:
-        st.markdown("#### PSA Pipeline")
-        st.info("Submission and grading workflow is planned for a future release.")
-
 with daily_tab:
     st.subheader("Daily Buy Board")
     st.write("Runs every saved search, scores live listings, combines the results, and stores a historical snapshot.")
@@ -444,6 +493,8 @@ with daily_tab:
             successful_count = 0
             empty_count = 0
             attempted_count = len(saved_daily)
+            batch_id = uuid.uuid4().hex
+            run_warnings = []
 
             if environment is None:
                 errors.append(
@@ -457,7 +508,6 @@ with daily_tab:
                     environment,
                     marketplace.strip() or "EBAY_US",
                 )
-                batch_id = uuid.uuid4().hex
                 progress = st.progress(0, text="Starting saved searches...")
                 for pos, row in saved_daily.reset_index(drop=True).iterrows():
                     search_name = str(row["name"])
@@ -492,10 +542,7 @@ with daily_tab:
                         )
                         scored["saved_search"] = search_name
                         scored["search_query"] = validated_query
-                        successful_count += 1
-                        if scored.empty:
-                            empty_count += 1
-                        else:
+                        if not scored.empty:
                             save_opportunity_batch(
                                 batch_id,
                                 int(row["id"]),
@@ -503,12 +550,16 @@ with daily_tab:
                                 validated_query,
                                 scored,
                             )
-                            combined.append(scored)
                         log_search_run(
                             validated_query,
                             len(scored),
                             int(row["id"]),
                         )
+                        successful_count += 1
+                        if scored.empty:
+                            empty_count += 1
+                        else:
+                            combined.append(scored)
                     except EbayApiError as exc:
                         log_sanitized_exception(
                             diagnostic_logger,
@@ -546,6 +597,28 @@ with daily_tab:
             )
             st.session_state["daily_board"] = board
             st.session_state["daily_board_outcome"] = outcome
+            try:
+                save_opportunity_batch_outcome(
+                    batch_id,
+                    status=outcome.status,
+                    attempted_count=outcome.attempted_count,
+                    successful_count=outcome.successful_count,
+                    empty_count=outcome.empty_count,
+                    failed_count=outcome.failed_count,
+                    result_count=outcome.result_count,
+                    completed_at=outcome.completed_at,
+                )
+            except Exception as exc:
+                log_sanitized_exception(
+                    diagnostic_logger,
+                    "DAILY_BATCH_OUTCOME_SAVE_FAILED",
+                    exc,
+                    "daily_board.outcome.persist",
+                )
+                run_warnings.append(
+                    "Daily Buy Board results are available, but the dashboard run "
+                    "status could not be saved. See local diagnostics."
+                )
             if not board.empty:
                 try:
                     save_output(board, "daily_buy_board.csv")
@@ -556,14 +629,18 @@ with daily_tab:
                         exc,
                         "daily_board.output.save",
                     )
-                    st.warning(
+                    run_warnings.append(
                         "Daily Buy Board results are available, but the local output file "
                         "could not be saved. See local diagnostics."
                     )
+            st.session_state["daily_board_warnings"] = tuple(run_warnings)
+            st.rerun()
 
         outcome = st.session_state.get("daily_board_outcome")
         if isinstance(outcome, RunOutcome):
             show_run_outcome("Daily Buy Board", outcome)
+        for warning in st.session_state.pop("daily_board_warnings", ()):
+            st.warning(warning)
         board = st.session_state.get("daily_board")
         if isinstance(board, pd.DataFrame) and not board.empty:
             metrics_block(board)
@@ -903,7 +980,13 @@ with saved_tab:
     df = list_saved_searches(); st.dataframe(df, width="stretch", hide_index=True)
     if not df.empty:
         delete_id = st.selectbox("Delete saved search", df["id"].tolist(), format_func=lambda x: df.loc[df.id == x, "name"].iloc[0])
-        if st.button("Delete Search"): delete_saved_search(int(delete_id)); st.rerun()
+        delete_confirmed = st.checkbox(
+            "Confirm deletion of the selected saved search",
+            key=f"confirm_saved_search_delete_{int(delete_id)}",
+        )
+        if st.button("Delete Search", disabled=not delete_confirmed):
+            delete_saved_search(int(delete_id))
+            st.rerun()
     st.subheader("Recent Search Runs"); st.dataframe(list_search_runs(), width="stretch", hide_index=True)
 
 with watch_tab:
@@ -911,7 +994,13 @@ with watch_tab:
     watch = list_watchlist(); st.dataframe(watch, width="stretch", hide_index=True)
     if not watch.empty:
         delete_id = st.selectbox("Remove watchlist item", watch["id"].tolist(), format_func=lambda x: watch.loc[watch.id == x, "title"].iloc[0][:100])
-        if st.button("Remove Item"): delete_watchlist_item(int(delete_id)); st.rerun()
+        removal_confirmed = st.checkbox(
+            "Confirm removal of the selected watchlist item",
+            key=f"confirm_watchlist_remove_{int(delete_id)}",
+        )
+        if st.button("Remove Item", disabled=not removal_confirmed):
+            delete_watchlist_item(int(delete_id))
+            st.rerun()
         try:
             st.download_button(
                 "Download Watchlist CSV",
@@ -930,8 +1019,16 @@ with watch_tab:
 
 with sample_tab:
     st.subheader("Sample Profit Analysis")
-    listings_file = st.file_uploader("Listings CSV", type=["csv"])
-    values_file = st.file_uploader("Card values CSV", type=["csv"])
+    listings_file = st.file_uploader(
+        "Listings CSV",
+        type=["csv"],
+        max_upload_size=MAX_CSV_UPLOAD_MB,
+    )
+    values_file = st.file_uploader(
+        "Card values CSV",
+        type=["csv"],
+        max_upload_size=MAX_CSV_UPLOAD_MB,
+    )
     sample_validation_error = None
     try:
         listings_source = listings_file if listings_file is not None else SAMPLE_LISTINGS_PATH
@@ -993,11 +1090,26 @@ with sample_tab:
 
 with values_tab:
     st.subheader("Card Values")
-    st.caption("Use exact card identifiers and verified sold comps. Rows marked 'Example only' are non-actionable by design.")
-    edited = st.data_editor(card_values, num_rows="dynamic", width="stretch")
+    st.caption(
+        "Use exact card identifiers and current verified sold comps. Expired, "
+        "unverified, and demonstration rows are non-actionable by design."
+    )
+    editor_values = card_values.copy()
+    renewal_report = build_valuation_renewal_report(editor_values)
+    editor_values["freshness_status"] = renewal_report[
+        "freshness_status"
+    ].to_numpy()
+    edited = st.data_editor(
+        editor_values,
+        num_rows="dynamic",
+        width="stretch",
+        disabled=["freshness_status"],
+    )
     if st.button("Save Card Values"):
         try:
-            validated_values = validate_valuation_frame(edited)
+            validated_values = validate_valuation_frame(
+                edited.drop(columns=["freshness_status"], errors="ignore")
+            )
         except InputValidationError as exc:
             log_sanitized_exception(
                 diagnostic_logger,
@@ -1008,7 +1120,7 @@ with values_tab:
             st.error(str(exc))
         else:
             try:
-                validated_values.to_csv(CARD_VALUES_PATH, index=False)
+                save_valuation_frame_atomically(CARD_VALUES_PATH, validated_values)
             except Exception as exc:
                 log_sanitized_exception(
                     diagnostic_logger,
@@ -1049,6 +1161,9 @@ The database is created automatically at `data/card_profit_hunter.db`.
         "Backups contain private local history and are stored under "
         "output/database_backups/. No cleanup runs automatically."
     )
+    restore_notice = st.session_state.pop("database_restore_notice", None)
+    if restore_notice:
+        st.success(restore_notice)
 
     if st.button("Create Database Backup"):
         try:
@@ -1074,6 +1189,121 @@ The database is created automatically at `data/card_profit_hunter.db`.
                 st.info("No local database is available to back up.")
             else:
                 st.success(f"Database backup created: {backup_path.name}")
+
+    st.markdown("#### Restore a Local Database Backup")
+    st.warning(
+        "Restoring replaces the current local database. CardProfitHunter creates a "
+        "separate safety backup of the current database before replacement."
+    )
+    try:
+        available_backups = sorted(
+            (
+                path
+                for path in DATABASE_BACKUP_DIR.glob("*.db")
+                if path.is_file() and not path.is_symlink()
+            ),
+            key=lambda path: path.name,
+            reverse=True,
+        )
+    except OSError as exc:
+        log_sanitized_exception(
+            diagnostic_logger,
+            "DATABASE_BACKUP_LIST_FAILED",
+            exc,
+            "database.backup.list",
+        )
+        available_backups = []
+        st.error("Local database backups could not be listed. See local diagnostics.")
+
+    if not available_backups:
+        st.info("No local database backups are available to restore.")
+    else:
+        backup_names = [path.name for path in available_backups]
+        selected_backup_name = st.selectbox(
+            "Local database backup",
+            backup_names,
+        )
+        selected_backup_path = DATABASE_BACKUP_DIR / selected_backup_name
+        if st.button("Verify Selected Database Backup"):
+            try:
+                verified_backup = inspect_database_backup(
+                    selected_backup_path,
+                    DATABASE_BACKUP_DIR,
+                )
+            except DatabaseMaintenanceError as exc:
+                st.session_state.pop("verified_database_backup", None)
+                log_sanitized_exception(
+                    diagnostic_logger,
+                    "DATABASE_BACKUP_VERIFY_FAILED",
+                    exc,
+                    "database.backup.verify",
+                )
+                st.error(str(exc))
+            except Exception as exc:
+                st.session_state.pop("verified_database_backup", None)
+                log_sanitized_exception(
+                    diagnostic_logger,
+                    "DATABASE_BACKUP_VERIFY_FAILED",
+                    exc,
+                    "database.backup.verify",
+                )
+                st.error("Database backup could not be verified. See local diagnostics.")
+            else:
+                st.session_state["verified_database_backup"] = selected_backup_name
+                st.success(
+                    "Backup verified: "
+                    f"schema {verified_backup['schema_version']}, "
+                    f"{verified_backup['size_bytes']} bytes."
+                )
+
+        selected_backup_verified = (
+            st.session_state.get("verified_database_backup")
+            == selected_backup_name
+        )
+        restore_confirmed = st.checkbox(
+            "I understand that restore will replace the current local database."
+        )
+        restore_allowed = selected_backup_verified and restore_confirmed
+        if st.button(
+            "Restore Selected Database Backup",
+            disabled=not restore_allowed,
+        ):
+            try:
+                restore_database_backup(
+                    selected_backup_path,
+                    DATABASE_BACKUP_DIR,
+                    confirmed=restore_confirmed,
+                )
+            except DatabaseMaintenanceError as exc:
+                log_sanitized_exception(
+                    diagnostic_logger,
+                    "DATABASE_RESTORE_FAILED",
+                    exc,
+                    "database.backup.restore",
+                )
+                st.error(str(exc))
+            except Exception as exc:
+                log_sanitized_exception(
+                    diagnostic_logger,
+                    "DATABASE_RESTORE_FAILED",
+                    exc,
+                    "database.backup.restore",
+                )
+                st.error("Database restore could not be completed. See local diagnostics.")
+            else:
+                for state_key in (
+                    "daily_board",
+                    "daily_board_outcome",
+                    "last_results",
+                    "live_search_outcome",
+                    "live_search_diagnostics",
+                    "verified_database_backup",
+                ):
+                    st.session_state.pop(state_key, None)
+                st.session_state["database_restore_notice"] = (
+                    "Database restored successfully. A pre-restore safety backup was created."
+                )
+                st.rerun()
 
     retention_days = st.number_input(
         "Keep search and opportunity history for at least this many days",
@@ -1107,7 +1337,8 @@ The database is created automatically at `data/card_profit_hunter.db`.
             st.info(
                 "Eligible for deletion: "
                 f"{preview['search_runs']} search runs and "
-                f"{preview['opportunity_snapshots']} opportunity snapshots."
+                f"{preview['opportunity_snapshots']} opportunity snapshots, plus "
+                f"{preview['opportunity_batches']} recorded batch outcomes."
             )
 
     retention_confirmed = st.checkbox(
@@ -1143,6 +1374,7 @@ The database is created automatically at `data/card_profit_hunter.db`.
             backup_path = deleted["backup_path"]
             st.success(
                 f"Deleted {deleted['search_runs']} search runs and "
-                f"{deleted['opportunity_snapshots']} opportunity snapshots. "
+                f"{deleted['opportunity_snapshots']} opportunity snapshots, plus "
+                f"{deleted['opportunity_batches']} recorded batch outcomes. "
                 f"Backup created first: {backup_path.name}"
             )

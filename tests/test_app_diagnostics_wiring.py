@@ -53,7 +53,7 @@ class AppDiagnosticsWiringTests(unittest.TestCase):
         keyword_names = {keyword.arg for keyword in startup_call.keywords}
 
         self.assertTrue({
-            "load_dotenv",
+            "load_local_environment",
             "init_db",
             "load_settings",
             "load_valuation_csv",

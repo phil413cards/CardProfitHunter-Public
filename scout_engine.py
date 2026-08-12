@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pandas as pd
 
 from card_parser import parse_card_identity
 from grading_estimator import estimate_grading_candidate
-from listing_classifier import classify_listing
+from listing_classifier import UNKNOWN, classify_listing
 from market_intelligence import build_market_context
 from profit_engine import analyze_listings
 from recommendation_engine import rank_recommendations
+from text_safety import required_text_issue, safe_text
 
 
 def enrich_listings(listings: pd.DataFrame, query: str) -> pd.DataFrame:
@@ -17,9 +20,23 @@ def enrich_listings(listings: pd.DataFrame, query: str) -> pd.DataFrame:
     rows = []
     for _, row in listings.iterrows():
         enriched = row.to_dict()
-        title = str(row.get("title", ""))
-        condition = str(row.get("condition", ""))
+        raw_title = row.get("title", "")
+        raw_condition = row.get("condition", "")
+        title = safe_text(raw_title)
+        condition = safe_text(raw_condition)
+        text_issue = required_text_issue(raw_title, "title")
+        if not text_issue:
+            text_issue = required_text_issue(raw_condition, "condition")
         classification = classify_listing(title, condition)
+        if text_issue:
+            classification = replace(
+                classification,
+                listing_class=UNKNOWN,
+                actionable=False,
+                raw=False,
+                single_card=False,
+                exclusion_reason=text_issue,
+            )
         identity = parse_card_identity(title, query)
         grading = estimate_grading_candidate(
             title,

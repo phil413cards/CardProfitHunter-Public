@@ -1,5 +1,6 @@
 import json
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -8,6 +9,7 @@ from ebay_client import normalize_ebay_items
 from profit_engine import (
     analyze_listing,
     analyze_listings,
+    calc_max_buy_prices,
     calc_psa_flip,
     calc_raw_flip,
     contains_term,
@@ -21,6 +23,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def engine_settings(**overrides):
     result = {
         "ebay_fee_pct": 0.1325,
+        "purchase_tax_pct": 0.10,
+        "promoted_listing_fee_pct": 0.05,
+        "return_defect_allowance_pct": 0.05,
+        "grading_loss_risk_pct": 0.01,
         "raw_flip_shipping_allowance": 6.0,
         "psa_grading_fee": 25.0,
         "psa_shipping_insurance_allowance": 12.0,
@@ -45,6 +51,11 @@ def verified_values():
         "psa10_value": 1100,
         "gem_rate_estimate": 0.55,
         "psa9_rate_estimate": 0.35,
+        "verification_status": "verified",
+        "verified_at": (date.today() - timedelta(days=1)).isoformat(),
+        "expires_at": (date.today() + timedelta(days=30)).isoformat(),
+        "source_url": "https://example.com/verified-comps",
+        "comp_count": 10,
         "notes": "Verified comps",
     }])
 
@@ -130,9 +141,10 @@ class ProfitEngineTests(unittest.TestCase):
                 self.assert_no_financial_fields(result)
 
     def test_verified_actionable_valuation_retains_financial_fields(self):
+        values = verified_values()
         result = analyze_listing(
             complete_listing(),
-            verified_values(),
+            values,
             engine_settings(),
         )
 
@@ -145,6 +157,96 @@ class ProfitEngineTests(unittest.TestCase):
         self.assertIsNotNone(result.best_expected_roi_pct)
         self.assertIsNotNone(result.raw_market_value)
         self.assertIsNotNone(result.raw_flip_profit)
+        source = values.iloc[0]
+        self.assertEqual(result.verification_status, "verified")
+        self.assertEqual(result.verified_at, source["verified_at"])
+        self.assertEqual(result.expires_at, source["expires_at"])
+        self.assertEqual(result.source_url, source["source_url"])
+        self.assertEqual(result.comp_count, 10)
+        self.assertEqual(result.valuation_notes, source["notes"])
+
+    def test_expired_or_unverifiable_valuations_are_nonfinancial(self):
+        cases = (
+            (
+                "expired",
+                {"expires_at": (date.today() - timedelta(days=1)).isoformat()},
+                "expired_valuation",
+            ),
+            (
+                "missing status",
+                {"verification_status": None},
+                "missing_valuation_provenance",
+            ),
+            (
+                "missing source",
+                {"source_url": ""},
+                "missing_valuation_provenance",
+            ),
+            (
+                "credential-bearing source",
+                {"source_url": "https://user:private@example.com/comps"},
+                "invalid_valuation_provenance",
+            ),
+            (
+                "malformed expiry",
+                {"expires_at": "not-a-date"},
+                "invalid_valuation_provenance",
+            ),
+            (
+                "unverified status",
+                {"verification_status": "unverified"},
+                "unverified_valuation_status",
+            ),
+        )
+
+        for name, overrides, expected_flag in cases:
+            with self.subTest(name=name):
+                values = verified_values()
+                for field, value in overrides.items():
+                    values[field] = values[field].astype(object)
+                    values.loc[0, field] = value
+
+                result = analyze_listing(
+                    complete_listing(),
+                    values,
+                    engine_settings(),
+                )
+
+                self.assertEqual(result.recommended_action, "PASS")
+                self.assertEqual(
+                    result.matched_card,
+                    "Shohei Ohtani Bowman Chrome RC",
+                )
+                self.assertIn("non_actionable_valuation", result.flags.split(";"))
+                self.assertIn(expected_flag, result.flags.split(";"))
+                self.assert_no_financial_fields(result)
+                self.assertEqual(result.verification_status, "")
+                self.assertEqual(result.verified_at, "")
+                self.assertEqual(result.expires_at, "")
+                self.assertEqual(result.source_url, "")
+                self.assertIsNone(result.comp_count)
+                self.assertEqual(result.valuation_notes, "")
+
+    def test_legacy_valuation_without_provenance_columns_is_nonfinancial(self):
+        values = verified_values().drop(
+            columns=[
+                "verification_status",
+                "verified_at",
+                "expires_at",
+                "source_url",
+                "comp_count",
+            ]
+        )
+
+        result = analyze_listing(
+            complete_listing(),
+            values,
+            engine_settings(),
+        )
+
+        self.assertEqual(result.recommended_action, "PASS")
+        self.assertIn("missing_valuation_provenance", result.flags.split(";"))
+        self.assert_no_financial_fields(result)
 
     def test_watch_result_is_nonfinancial(self):
         card_values = verified_values()
@@ -160,9 +262,13 @@ class ProfitEngineTests(unittest.TestCase):
         self.assertEqual(result.recommended_action, "WATCH")
         self.assert_no_financial_fields(result)
 
-    def test_roi_uses_total_modeled_cost(self):
+    def test_roi_uses_total_modeled_cost_including_risk_allowances(self):
         settings = engine_settings(
             ebay_fee_pct=0.10,
+            purchase_tax_pct=0.08,
+            promoted_listing_fee_pct=0.03,
+            return_defect_allowance_pct=0.04,
+            grading_loss_risk_pct=0.02,
             raw_flip_shipping_allowance=6.0,
             psa_grading_fee=25.0,
             psa_shipping_insurance_allowance=12.0,
@@ -170,9 +276,24 @@ class ProfitEngineTests(unittest.TestCase):
         )
 
         raw_profit, raw_roi = calc_raw_flip(110.0, 200.0, settings)
-        raw_total_cost = 110.0 + 20.0 + 6.0
-        self.assertEqual(raw_profit, 64.0)
-        self.assertAlmostEqual(raw_roi, round((64.0 / raw_total_cost) * 100, 1))
+        raw_purchase_tax = 110.0 * 0.08
+        raw_marketplace_fee = 200.0 * 0.10
+        raw_promoted_fee = 200.0 * 0.03
+        raw_return_allowance = 200.0 * 0.04
+        raw_total_cost = (
+            110.0
+            + raw_purchase_tax
+            + raw_marketplace_fee
+            + raw_promoted_fee
+            + raw_return_allowance
+            + 6.0
+        )
+        expected_raw_profit = round(200.0 - raw_total_cost, 2)
+        self.assertEqual(raw_profit, expected_raw_profit)
+        self.assertAlmostEqual(
+            raw_roi,
+            round((expected_raw_profit / raw_total_cost) * 100, 1),
+        )
 
         expected_sale, psa_profit, psa_roi = calc_psa_flip(
             110.0,
@@ -183,10 +304,56 @@ class ProfitEngineTests(unittest.TestCase):
             psa9_rate=0.5,
             settings=settings,
         )
-        psa_total_cost = 110.0 + 25.0 + 12.0 + 8.0 + 30.0
+        psa_purchase_with_tax = 110.0 * 1.08
+        psa_grading_costs_at_risk = 25.0 + 12.0
+        psa_grading_loss_allowance = (
+            psa_purchase_with_tax + psa_grading_costs_at_risk
+        ) * 0.02
+        psa_marketplace_fee = 300.0 * 0.10
+        psa_promoted_fee = 300.0 * 0.03
+        psa_return_allowance = 300.0 * 0.04
+        psa_total_cost = (
+            psa_purchase_with_tax
+            + psa_grading_costs_at_risk
+            + psa_grading_loss_allowance
+            + 8.0
+            + psa_marketplace_fee
+            + psa_promoted_fee
+            + psa_return_allowance
+        )
         self.assertEqual(expected_sale, 300.0)
-        self.assertEqual(psa_profit, 115.0)
-        self.assertAlmostEqual(psa_roi, round((115.0 / psa_total_cost) * 100, 1))
+        expected_psa_profit = round(300.0 - psa_total_cost, 2)
+        self.assertEqual(psa_profit, expected_psa_profit)
+        self.assertAlmostEqual(
+            psa_roi,
+            round((expected_psa_profit / psa_total_cost) * 100, 1),
+        )
+
+    def test_new_costs_reduce_max_buy_prices(self):
+        zero_risk_settings = engine_settings(
+            purchase_tax_pct=0.0,
+            promoted_listing_fee_pct=0.0,
+            return_defect_allowance_pct=0.0,
+            grading_loss_risk_pct=0.0,
+        )
+        modeled_risk_settings = engine_settings(
+            purchase_tax_pct=0.10,
+            promoted_listing_fee_pct=0.05,
+            return_defect_allowance_pct=0.05,
+            grading_loss_risk_pct=0.01,
+        )
+
+        zero_raw, zero_psa = calc_max_buy_prices(
+            verified_values().iloc[0],
+            zero_risk_settings,
+        )
+        modeled_raw, modeled_psa = calc_max_buy_prices(
+            verified_values().iloc[0],
+            modeled_risk_settings,
+        )
+
+        self.assertLess(modeled_raw, zero_raw)
+        self.assertLess(modeled_psa, zero_psa)
 
     def test_incomplete_or_incompatible_listings_are_non_actionable(self):
         cases = [
@@ -243,6 +410,35 @@ class ProfitEngineTests(unittest.TestCase):
                 "invalid fee percentage",
                 engine_settings(ebay_fee_pct=1.5),
                 "invalid_modeled_cost_ebay_fee_pct",
+            ),
+            (
+                "missing purchase tax",
+                engine_settings(purchase_tax_pct=None),
+                "missing_modeled_cost_purchase_tax_pct",
+            ),
+            (
+                "invalid promoted listing fee",
+                engine_settings(promoted_listing_fee_pct=-0.01),
+                "invalid_modeled_cost_promoted_listing_fee_pct",
+            ),
+            (
+                "invalid return allowance",
+                engine_settings(return_defect_allowance_pct=1.01),
+                "invalid_modeled_cost_return_defect_allowance_pct",
+            ),
+            (
+                "invalid grading loss risk",
+                engine_settings(grading_loss_risk_pct=1.01),
+                "invalid_modeled_cost_grading_loss_risk_pct",
+            ),
+            (
+                "combined selling rates above sale value",
+                engine_settings(
+                    ebay_fee_pct=0.50,
+                    promoted_listing_fee_pct=0.30,
+                    return_defect_allowance_pct=0.30,
+                ),
+                "invalid_modeled_cost_combined_selling_rate",
             ),
         ]
 

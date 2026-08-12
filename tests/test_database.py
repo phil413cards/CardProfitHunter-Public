@@ -1,5 +1,6 @@
 import json
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -21,6 +22,7 @@ def opportunity(
     score,
     suggested_offer=None,
 ):
+    today = datetime.now(timezone.utc).date()
     return {
         "item_id": item_id,
         "title": title,
@@ -36,6 +38,15 @@ def opportunity(
         "max_buy_price_raw_flip": 80.0,
         "suggested_offer": suggested_offer,
         "raw_market_value": 200.0,
+        "seller_username": "trusted-seller",
+        "seller_feedback": 100,
+        "seller_feedback_pct": 99.0,
+        "verification_status": "verified",
+        "verified_at": (today - timedelta(days=1)).isoformat(),
+        "expires_at": (today + timedelta(days=30)).isoformat(),
+        "source_url": "https://example.com/verified-comps",
+        "comp_count": 10,
+        "valuation_notes": "Verified comps",
     }
 
 
@@ -59,12 +70,27 @@ class DatabaseDashboardTests(unittest.TestCase):
         )
 
     def insert_legacy_row(self, title, action, profit, roi, score, batch_id="legacy"):
+        today = datetime.now(timezone.utc).date()
+        payload = json.dumps({
+            "title": title,
+            "recommended_action": action,
+            "seller_username": "trusted-seller",
+            "seller_feedback": 100,
+            "seller_feedback_pct": 99.0,
+            "verification_status": "verified",
+            "verified_at": (today - timedelta(days=1)).isoformat(),
+            "expires_at": (today + timedelta(days=30)).isoformat(),
+            "source_url": "https://example.com/verified-comps",
+            "comp_count": 10,
+            "valuation_notes": "Verified comps",
+        })
         with database.connect() as conn:
             conn.execute(
                 """INSERT INTO opportunity_snapshots(
                        batch_id, saved_search_name, query, title, recommended_action,
-                       total_score, expected_profit, expected_roi_pct, created_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       total_score, expected_profit, expected_roi_pct, payload_json,
+                       created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     batch_id,
                     "Legacy Search",
@@ -74,6 +100,7 @@ class DatabaseDashboardTests(unittest.TestCase):
                     score,
                     profit,
                     roi,
+                    payload,
                     database.utc_now(),
                 ),
             )
