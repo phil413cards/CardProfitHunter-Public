@@ -2,13 +2,14 @@
 
 ## Project purpose
 
-Card Profit Hunter V5.2.42 is a Python/Streamlit application for finding and ranking sports-card opportunities from eBay. It runs saved searches, normalizes Browse API results, evaluates raw-flip and PSA-grading economics, and stores saved searches, watchlists, run outcomes, and opportunity snapshots in local SQLite. Treat all scores, profits, ROI values, and suggested offers as decision support, not guaranteed outcomes. The supported launch baseline is local-only, single-user development and controlled demonstrations; do not add hosted or multi-user behavior unless explicitly requested and separately reviewed.
+Card Profit Hunter V5.2.43 is a Python/Streamlit application for finding and ranking sports-card opportunities from eBay. It runs saved searches, normalizes Browse API results, evaluates raw-flip and PSA-grading economics, and stores saved searches, watchlists, run outcomes, and opportunity snapshots in local SQLite. Treat all scores, profits, ROI values, and suggested offers as decision support, not guaranteed outcomes. The supported launch baseline is local-only, single-user development and controlled demonstrations; do not add hosted or multi-user behavior unless explicitly requested and separately reviewed.
 
 ## Repository layout
 
 - `app.py`: Streamlit entry point, UI tabs, settings, searches, and CSV exports.
 - `ebay_client.py`: eBay client-credentials OAuth, token cache, Browse API search, and result normalization.
 - `profit_engine.py`: card matching, valuation safety checks, profit/ROI calculations, scoring, and recommendations.
+- `beta_review.py`: validation and aggregate metrics for manually reviewed local beta evidence.
 - `database.py`: SQLite schema and data-access functions. The local database is `data/card_profit_hunter.db`.
 - `config/settings.json`: tracked fee, cost, threshold, and offer-cap defaults.
 - `sample_data/`: tracked demonstration listings and valuations. Bundled valuations marked `Example only` are not actionable.
@@ -107,6 +108,7 @@ There is no build step, package configuration, or lockfile in this repository. D
 - Treat `sample_data/card_values.csv` as demonstration data unless a row has `verification_status=verified`, current ISO verification/expiry dates, an HTTPS source URL, and a positive comp count. Notes alone never make a valuation actionable. Do not convert example, unverified, malformed, or expired values into actionable recommendations.
 - CSV exports and other generated output belong under ignored `output/` and must not be committed. Preserve spreadsheet sanitization, atomic replacement, private `0700`/`0600` directory and file modes on POSIX, and fail-closed symlink handling for generated CSV writes.
 - Preserve bounded Sample Analysis inputs: each upload is at most 5 MB, and listing/valuation frames are limited to 1,000 rows and 64 columns before analysis.
+- Keep completed beta-review CSVs under ignored `output/beta_reviews/`. Aggregate reports must not print listing references or notes, and beta evidence must not silently change recommendation rules or establish launch thresholds.
 - This public repository is a sanitized source copy with separate clean history. Never import or merge the private development repository's history; sync only a reviewed tracked tree after private-runtime artifact and secret checks pass.
 
 ## Dependency rules

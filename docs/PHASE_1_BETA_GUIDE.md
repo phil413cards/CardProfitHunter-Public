@@ -1,6 +1,6 @@
 # CardProfitHunter Phase 1 Beta Guide
 
-CardProfitHunter 5.2.42 is ready for private, controlled, local beta testing. Kevin is the only Phase 1 beta tester. There are no outside users, subscriptions, hosted deployments, or public marketing in this phase.
+CardProfitHunter 5.2.43 is ready for private, controlled, local beta testing. Kevin is the only Phase 1 beta tester. There are no outside users, subscriptions, hosted deployments, or public marketing in this phase.
 
 The Phase 1 goal is to prove usefulness, reliability, and real-world decision quality. Testing must not make or imply claims of guaranteed profit.
 
@@ -95,6 +95,10 @@ Open the local URL printed by Streamlit, normally `http://localhost:8501`. Stop 
 8. Optionally test **Live Search** with sandbox credentials, a small result limit, and a valid query. Keep the environment set to sandbox and do not treat sandbox results as real buying opportunities.
 9. Optionally save a search and run **Daily Buy Board**. Confirm empty, partial, failed, and successful states are clearly identified and stale results do not remain after a new failure.
 10. If results are available, download a CSV and confirm it opens normally. Do not place orders or make offers based on a beta recommendation.
+
+Use the [Beta Decision-Quality Workflow](BETA_DECISION_QUALITY.md) to record
+structured human review of actionable results and a consistent sample of PASS
+and WATCH rows. Keep completed evidence files local under ignored `output/`.
 
 Do not use the retention deletion control during a routine demo. Database backup and cleanup are explicit local maintenance actions, not required demo steps.
 
