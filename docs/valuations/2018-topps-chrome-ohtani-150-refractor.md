@@ -1,13 +1,13 @@
 # 2018 Topps Chrome Shohei Ohtani #150 Refractor valuation
 
-Reviewed: 2026-08-09 UTC
-Revalidate by: 2026-09-08 UTC
+Reviewed: 2026-08-12 UTC
+Revalidate by: 2026-09-11 UTC
 
 Structured valuation metadata:
 
 - Verification status: `verified`
-- Verified at: `2026-08-09`
-- Expires at: `2026-09-08`
+- Verified at: `2026-08-12`
+- Expires at: `2026-09-11`
 - Primary source: [SportsCardsPro sold-sales tracker](https://www.sportscardspro.com/game/baseball-cards-2018-topps-chrome/shohei-ohtani-refractor-150)
 - Exact-card comp count reviewed: 30
 
@@ -23,6 +23,7 @@ Structured valuation metadata:
 ## Evidence
 
 - The [SportsCardsPro sold-sales tracker](https://www.sportscardspro.com/game/baseball-cards-2018-topps-chrome/shohei-ohtani-refractor-150) showed 30 recent entries in each of the ungraded, grade-9, and PSA-10 sections when reviewed.
+- On 2026-08-12, the tracker reported headline estimates of $3,320.16 ungraded, $3,428.90 grade 9, and $6,850 PSA 10; the existing rounded values remain below those estimates.
 - Recent exact-looking raw sales were generally about $2,750-$4,250. A $2,600 listing marked `READ` was excluded from the center estimate.
 - Recent exact PSA 9 sales were generally about $2,800-$3,750.
 - Recent exact PSA 10 sales were generally about $5,700-$7,218.
@@ -33,9 +34,9 @@ Structured valuation metadata:
 
 | Field | Value | Rationale |
 | --- | ---: | --- |
-| Raw market value | $3,000 | Conservative rounded value near the lower portion of recent clean raw sales |
-| PSA 9 value | $3,200 | Conservative rounded value below the latest exact PSA 9 sales |
-| PSA 10 value | $6,400 | Conservative rounded value within the recent exact PSA 10 cluster |
+| Raw market value | $3,000 | Conservative rounded value below the current tracker estimate |
+| PSA 9 value | $3,200 | Conservative rounded value below the current tracker estimate |
+| PSA 10 value | $6,400 | Conservative rounded value below the current tracker estimate |
 | Gem-rate estimate | 0 | Disabled; sold prices and population data do not establish a raw card's grading probability |
 | PSA-9-rate estimate | 0 | Disabled; sold prices and population data do not establish a raw card's grading probability |
 

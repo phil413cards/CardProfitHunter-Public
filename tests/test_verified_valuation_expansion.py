@@ -44,8 +44,8 @@ EXPANDED_VALUATIONS = (
     },
     {
         "keyword": "2003-04 Topps Chrome LeBron James #111 Rookie Cavaliers",
-        "raw_market_value": 2600.0,
-        "psa9_value": 5600.0,
+        "raw_market_value": 2500.0,
+        "psa9_value": 5200.0,
         "psa10_value": 15500.0,
         "source_url": (
             "https://www.sportscardspro.com/game/"
@@ -121,8 +121,8 @@ class VerifiedValuationExpansionTests(unittest.TestCase):
             row = self.valuation_rows(expected["keyword"]).iloc[0]
             with self.subTest(keyword=expected["keyword"]):
                 self.assertEqual(row["verification_status"], "verified")
-                self.assertEqual(row["verified_at"], "2026-08-09")
-                self.assertEqual(row["expires_at"], "2026-09-08")
+                self.assertEqual(row["verified_at"], "2026-08-12")
+                self.assertEqual(row["expires_at"], "2026-09-11")
                 self.assertEqual(row["source_url"], expected["source_url"])
                 self.assertEqual(int(row["comp_count"]), 30)
                 self.assertEqual(float(row["raw_market_value"]), expected["raw_market_value"])
@@ -136,11 +136,11 @@ class VerifiedValuationExpansionTests(unittest.TestCase):
             row = self.valuation_rows(expected["keyword"]).iloc[0]
             with self.subTest(keyword=expected["keyword"]):
                 self.assertEqual(
-                    valuation_provenance_flags(row, as_of=date(2026, 9, 8)),
+                    valuation_provenance_flags(row, as_of=date(2026, 9, 11)),
                     (),
                 )
                 self.assertEqual(
-                    valuation_provenance_flags(row, as_of=date(2026, 9, 9)),
+                    valuation_provenance_flags(row, as_of=date(2026, 9, 12)),
                     ("expired_valuation",),
                 )
 

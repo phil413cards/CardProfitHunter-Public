@@ -1,13 +1,13 @@
 # 2023-24 Panini Prizm Victor Wembanyama #136 Silver valuation
 
-Reviewed: 2026-08-09 UTC
-Revalidate by: 2026-09-08 UTC
+Reviewed: 2026-08-12 UTC
+Revalidate by: 2026-09-11 UTC
 
 Structured valuation metadata:
 
 - Verification status: `verified`
-- Verified at: `2026-08-09`
-- Expires at: `2026-09-08`
+- Verified at: `2026-08-12`
+- Expires at: `2026-09-11`
 - Primary source: [SportsCardsPro sold-sales tracker](https://www.sportscardspro.com/game/basketball-cards-2023-panini-prizm/victor-wembanyama-silver-136)
 - Exact-card comp count reviewed: 30
 
@@ -23,6 +23,7 @@ Structured valuation metadata:
 ## Evidence
 
 - The [SportsCardsPro sold-sales tracker](https://www.sportscardspro.com/game/basketball-cards-2023-panini-prizm/victor-wembanyama-silver-136) showed 30 recent entries in each of the ungraded, grade-9, and PSA-10 sections when reviewed.
+- On 2026-08-12, the tracker reported headline estimates of $982 ungraded, $1,070.09 grade 9, and $3,057.80 PSA 10; the existing rounded values remain below those estimates.
 - Recent exact-looking raw sales were generally about $823-$1,297, with lower and higher outliers.
 - Recent exact PSA 9 sales were generally about $960-$1,150.
 - Recent exact PSA 10 sales were generally about $2,900-$3,350.
@@ -33,9 +34,9 @@ Structured valuation metadata:
 
 | Field | Value | Rationale |
 | --- | ---: | --- |
-| Raw market value | $900 | Conservative rounded value near the lower end of the recent raw cluster |
-| PSA 9 value | $1,000 | Conservative rounded value below the recent exact PSA 9 center |
-| PSA 10 value | $2,900 | Conservative rounded value supported by both trackers |
+| Raw market value | $900 | Conservative rounded value below the current tracker estimate |
+| PSA 9 value | $1,000 | Conservative rounded value below the current tracker estimate |
+| PSA 10 value | $2,900 | Conservative rounded value below the current tracker estimate |
 | Gem-rate estimate | 0 | Disabled; sold prices and population data do not establish a raw card's grading probability |
 | PSA-9-rate estimate | 0 | Disabled; sold prices and population data do not establish a raw card's grading probability |
 
