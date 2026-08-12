@@ -36,6 +36,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--as-of", type=_iso_date, default=None)
     parser.add_argument("--renewal-window-days", type=int, default=30)
+    parser.add_argument(
+        "--fail-on-blocking",
+        action="store_true",
+        help=(
+            "exit unsuccessfully when verified valuations are expired or have "
+            "missing or invalid provenance"
+        ),
+    )
     return parser
 
 
@@ -91,6 +99,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"expires={row.expires_at or 'unknown'} | "
                 f"days={_days_text(row.days_until_expiry)}"
             )
+
+    blocking_count = (
+        summary["expired"]
+        + summary["missing_provenance"]
+        + summary["invalid_provenance"]
+    )
+    if args.fail_on_blocking and blocking_count:
+        print(
+            "Valuation audit found blocking valuation data. Review the renewal "
+            "summary before release.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

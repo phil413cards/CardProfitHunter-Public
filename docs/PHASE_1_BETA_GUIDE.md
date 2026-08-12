@@ -1,6 +1,6 @@
 # CardProfitHunter Phase 1 Beta Guide
 
-CardProfitHunter 5.2.41 is ready for private, controlled, local beta testing. Kevin is the only Phase 1 beta tester. There are no outside users, subscriptions, hosted deployments, or public marketing in this phase.
+CardProfitHunter 5.2.42 is ready for private, controlled, local beta testing. Kevin is the only Phase 1 beta tester. There are no outside users, subscriptions, hosted deployments, or public marketing in this phase.
 
 The Phase 1 goal is to prove usefulness, reliability, and real-world decision quality. Testing must not make or imply claims of guaranteed profit.
 

@@ -180,6 +180,93 @@ class ValuationRenewalCliTests(unittest.TestCase):
         self.assertNotIn("PRIVATE_TOKEN", stderr.getvalue())
         self.assertIn("could not be completed", stderr.getvalue())
 
+    def test_ci_gate_allows_due_soon_and_non_actionable_rows(self):
+        rows = [
+            valuation(keyword="Due", expires_at="2026-09-01"),
+            valuation(
+                keyword="Demo",
+                verification_status="demonstration",
+                verified_at="",
+                expires_at="",
+                source_url="",
+                comp_count="",
+                notes="Example only",
+            ),
+        ]
+
+        exit_code, stdout, stderr = self._run_cli(rows, "--fail-on-blocking")
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("due_soon: 1", stdout)
+        self.assertIn("non_actionable: 1", stdout)
+        self.assertEqual(stderr, "")
+
+    def test_ci_gate_rejects_expired_verified_valuation(self):
+        row = valuation(expires_at="2026-08-08")
+
+        exit_code, stdout, stderr = self._run_cli(
+            [row],
+            "--fail-on-blocking",
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("expired: 1", stdout)
+        self.assertIn("blocking valuation data", stderr)
+        self.assertNotIn(row["keyword"], stderr)
+
+    def test_default_audit_remains_informational_for_expired_rows(self):
+        exit_code, stdout, stderr = self._run_cli(
+            [valuation(expires_at="2026-08-08")]
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("expired: 1", stdout)
+        self.assertEqual(stderr, "")
+
+    def test_ci_rejects_missing_or_invalid_provenance_during_input_validation(self):
+        rows = (
+            valuation(keyword="PRIVATE_MISSING", source_url=""),
+            valuation(
+                keyword="PRIVATE_INVALID",
+                source_url="http://example.com/sold-comps",
+            ),
+        )
+
+        for row in rows:
+            with self.subTest(keyword=row["keyword"]):
+                exit_code, stdout, stderr = self._run_cli(
+                    [row],
+                    "--fail-on-blocking",
+                )
+
+                self.assertEqual(exit_code, 1)
+                self.assertEqual(stdout, "")
+                self.assertIn("could not be completed", stderr)
+                self.assertNotIn(row["keyword"], stderr)
+
+    @staticmethod
+    def _run_cli(rows, *extra_args):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "values.csv"
+            pd.DataFrame(rows).to_csv(source, index=False)
+            stdout = StringIO()
+            stderr = StringIO()
+
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "--input",
+                        str(source),
+                        "--as-of",
+                        "2026-08-09",
+                        "--renewal-window-days",
+                        "30",
+                        *extra_args,
+                    ]
+                )
+
+            return exit_code, stdout.getvalue(), stderr.getvalue()
+
 
 if __name__ == "__main__":
     unittest.main()

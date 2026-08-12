@@ -49,6 +49,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      - name: Reject blocking valuation freshness issues
+        run: python scripts/audit_valuations.py --fail-on-blocking
+
       - name: Run unittest discovery
         env:
           PYTHONDONTWRITEBYTECODE: "1"

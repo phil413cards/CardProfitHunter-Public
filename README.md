@@ -1,4 +1,4 @@
-# CardProfitHunter 5.2.41
+# CardProfitHunter 5.2.42
 
 CardProfitHunter is a Python/Streamlit application for finding and evaluating sports-card listings from eBay. It normalizes Browse API results, applies conservative card-identity matching, models raw-flip and PSA-grading economics, and stores local searches, run outcomes, and opportunity snapshots in SQLite.
 

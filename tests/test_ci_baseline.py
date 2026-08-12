@@ -100,6 +100,12 @@ class PythonWorkflowTests(unittest.TestCase):
         self.assertNotIn("EBAY_CLIENT", self.source)
         self.assertNotIn("EBAY_ENVIRONMENT", self.source)
 
+    def test_workflow_rejects_blocking_valuation_freshness_issues(self):
+        self.assertIn(
+            "python scripts/audit_valuations.py --fail-on-blocking",
+            self.source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
