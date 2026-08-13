@@ -11,6 +11,11 @@ from profit_engine import ProfitResult
 
 ANALYSIS_COLUMNS = tuple(field.name for field in fields(ProfitResult))
 DAILY_BOARD_METADATA_COLUMNS = ("saved_search", "search_query")
+EXPORT_TRACE_COLUMNS = (
+    "search_query",
+    "application_version",
+    "search_completed_at",
+)
 
 
 @dataclass(frozen=True)
@@ -47,6 +52,32 @@ def stable_analysis_frame(
 
     remaining = [column for column in stable.columns if column not in expected_columns]
     return stable[expected_columns + remaining]
+
+
+def prepare_results_export(
+    frame: pd.DataFrame,
+    *,
+    application_version: str,
+    completed_at: str,
+    search_query: str | None = None,
+) -> pd.DataFrame:
+    """Return an export-only copy with deterministic run traceability fields."""
+    exported = pd.DataFrame() if frame is None else frame.copy(deep=True)
+
+    if search_query is not None:
+        exported["search_query"] = str(search_query)
+    elif "search_query" not in exported.columns:
+        exported["search_query"] = ""
+
+    exported["application_version"] = str(application_version)
+    exported["search_completed_at"] = str(completed_at)
+
+    remaining = [
+        column
+        for column in exported.columns
+        if column not in EXPORT_TRACE_COLUMNS
+    ]
+    return exported[list(EXPORT_TRACE_COLUMNS) + remaining]
 
 
 def combine_board_results(

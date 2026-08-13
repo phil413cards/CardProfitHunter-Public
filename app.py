@@ -61,6 +61,7 @@ from search_workflows import (
     clear_result_state,
     combine_board_results,
     empty_analysis_frame,
+    prepare_results_export,
     stable_analysis_frame,
 )
 from valuation_renewal import (
@@ -621,7 +622,14 @@ with daily_tab:
                 )
             if not board.empty:
                 try:
-                    save_output(board, "daily_buy_board.csv")
+                    save_output(
+                        prepare_results_export(
+                            board,
+                            application_version=APPLICATION_VERSION,
+                            completed_at=outcome.completed_at,
+                        ),
+                        "daily_buy_board.csv",
+                    )
                 except Exception as exc:
                     log_sanitized_exception(
                         diagnostic_logger,
@@ -648,7 +656,13 @@ with daily_tab:
             try:
                 st.download_button(
                     "Download Daily Buy Board CSV",
-                    dataframe_to_spreadsheet_safe_csv(board).encode("utf-8"),
+                    dataframe_to_spreadsheet_safe_csv(
+                        prepare_results_export(
+                            board,
+                            application_version=APPLICATION_VERSION,
+                            completed_at=outcome.completed_at,
+                        )
+                    ).encode("utf-8"),
                     "daily_buy_board.csv",
                     "text/csv",
                 )
@@ -767,16 +781,19 @@ with live_tab:
             "live_search_outcome",
         )
         st.session_state.pop("live_search_diagnostics", None)
+        st.session_state.pop("live_search_query", None)
         errors = []
         successful_count = 0
         empty_count = 0
         results = empty_analysis_frame()
+        completed_query = ""
 
         try:
             validated_query, validated_category_ids = validate_search_inputs(
                 q,
                 category_ids,
             )
+            completed_query = validated_query
         except InputValidationError as exc:
             log_sanitized_exception(
                 diagnostic_logger,
@@ -850,20 +867,6 @@ with live_tab:
                     if selected != "New search" and preset is not None:
                         saved_id = int(preset["id"])
                     log_search_run(validated_query, len(results), saved_id)
-                    if not results.empty:
-                        try:
-                            save_output(results, "live_ebay_buy_board.csv")
-                        except Exception as exc:
-                            log_sanitized_exception(
-                                diagnostic_logger,
-                                "LIVE_OUTPUT_SAVE_FAILED",
-                                exc,
-                                "live_search.output.save",
-                            )
-                            st.warning(
-                                "Live Search results are available, but the local output file "
-                                "could not be saved. See local diagnostics."
-                            )
             except EbayApiError as exc:
                 log_sanitized_exception(
                     diagnostic_logger,
@@ -893,6 +896,30 @@ with live_tab:
         )
         st.session_state["last_results"] = results
         st.session_state["live_search_outcome"] = outcome
+        if successful_count:
+            st.session_state["live_search_query"] = completed_query
+        if not results.empty:
+            try:
+                save_output(
+                    prepare_results_export(
+                        results,
+                        application_version=APPLICATION_VERSION,
+                        completed_at=outcome.completed_at,
+                        search_query=completed_query,
+                    ),
+                    "live_ebay_buy_board.csv",
+                )
+            except Exception as exc:
+                log_sanitized_exception(
+                    diagnostic_logger,
+                    "LIVE_OUTPUT_SAVE_FAILED",
+                    exc,
+                    "live_search.output.save",
+                )
+                st.warning(
+                    "Live Search results are available, but the local output file "
+                    "could not be saved. See local diagnostics."
+                )
 
     outcome = st.session_state.get("live_search_outcome")
     if isinstance(outcome, RunOutcome):
@@ -946,9 +973,19 @@ with live_tab:
             result_table(scout_candidates)
 
         try:
+            export_results = prepare_results_export(
+                results,
+                application_version=APPLICATION_VERSION,
+                completed_at=(
+                    outcome.completed_at
+                    if isinstance(outcome, RunOutcome)
+                    else ""
+                ),
+                search_query=st.session_state.get("live_search_query", ""),
+            )
             st.download_button(
                 "Download Search Results CSV",
-                dataframe_to_spreadsheet_safe_csv(results).encode("utf-8"),
+                dataframe_to_spreadsheet_safe_csv(export_results).encode("utf-8"),
                 "live_ebay_search_results.csv",
                 "text/csv",
             )
