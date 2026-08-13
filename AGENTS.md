@@ -2,7 +2,7 @@
 
 ## Project purpose
 
-Card Profit Hunter V5.2.44 is a Python/Streamlit application for finding and ranking sports-card opportunities from eBay. It runs saved searches, normalizes Browse API results, evaluates raw-flip and PSA-grading economics, and stores saved searches, watchlists, run outcomes, and opportunity snapshots in local SQLite. Treat all scores, profits, ROI values, and suggested offers as decision support, not guaranteed outcomes. The supported launch baseline is local-only, single-user development and controlled demonstrations; do not add hosted or multi-user behavior unless explicitly requested and separately reviewed.
+Card Profit Hunter V5.2.45 is a Python/Streamlit application for finding and ranking sports-card opportunities from eBay. It runs saved searches, normalizes Browse API results, evaluates raw-flip and PSA-grading economics, and stores saved searches, watchlists, run outcomes, and opportunity snapshots in local SQLite. Treat all scores, profits, ROI values, and suggested offers as decision support, not guaranteed outcomes. The supported launch baseline is local-only, single-user development and controlled demonstrations; do not add hosted or multi-user behavior unless explicitly requested and separately reviewed.
 
 ## Repository layout
 
