@@ -146,9 +146,9 @@ class ProfitResult:
     suggested_offer: Optional[float]
 
     title: str
-    total_price: float
+    total_price: Optional[float]
     price: float
-    shipping: float
+    shipping: Optional[float]
     currency: str
     item_url: str
     image_url: str
@@ -847,8 +847,20 @@ def analyze_listing(listing: pd.Series, card_values: pd.DataFrame, settings: dic
     parsed_price = _finite_float(raw_price)
     parsed_shipping = _finite_float(raw_shipping)
     price = parsed_price if parsed_price is not None else 0.0
-    shipping = parsed_shipping if parsed_shipping is not None else 0.0
-    total_price = round(price + shipping, 2)
+    shipping = (
+        parsed_shipping
+        if (
+            not _is_missing(raw_shipping)
+            and parsed_shipping is not None
+            and parsed_shipping >= 0
+        )
+        else None
+    )
+    total_price = (
+        round(parsed_price + shipping, 2)
+        if parsed_price is not None and parsed_price > 0 and shipping is not None
+        else None
+    )
     raw_currency = listing.get("currency")
     currency = "" if _is_missing(raw_currency) else normalize(raw_currency).upper()
     item_url = normalize(listing.get("item_url", ""))
