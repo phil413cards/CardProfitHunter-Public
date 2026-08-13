@@ -466,6 +466,35 @@ class ProfitEngineTests(unittest.TestCase):
                 self.assertIsNotNone(result.raw_flip_roi_pct)
                 self.assertIsNotNone(result.psa_expected_roi_pct)
 
+    def test_analysis_preserves_unknown_shipping_without_fake_zero_total(self):
+        cases = (
+            ("missing", None, "missing_shipping"),
+            ("nan", float("nan"), "missing_shipping"),
+            ("invalid", "unknown", "invalid_shipping"),
+            ("negative", -1, "invalid_shipping"),
+        )
+
+        for name, shipping, expected_flag in cases:
+            with self.subTest(name=name):
+                result = analyze_listing(
+                    complete_listing(shipping=shipping),
+                    verified_values(),
+                    engine_settings(),
+                )
+
+                self.assertIsNone(result.shipping)
+                self.assertIsNone(result.total_price)
+                self.assertEqual(result.recommended_action, "PASS")
+                self.assertIn(expected_flag, result.flags)
+
+        free_shipping = analyze_listing(
+            complete_listing(price=20.0, shipping=0.0),
+            verified_values(),
+            engine_settings(),
+        )
+        self.assertEqual(free_shipping.shipping, 0.0)
+        self.assertEqual(free_shipping.total_price, 20.0)
+
     def test_offer_requires_best_offer_support(self):
         best_offer = analyze_listing(
             complete_listing(price=600.0, buying_options="BEST_OFFER"),
