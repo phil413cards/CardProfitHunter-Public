@@ -5,10 +5,12 @@ import pandas as pd
 from search_workflows import (
     ANALYSIS_COLUMNS,
     DAILY_BOARD_METADATA_COLUMNS,
+    EXPORT_TRACE_COLUMNS,
     build_run_outcome,
     clear_result_state,
     combine_board_results,
     empty_analysis_frame,
+    prepare_results_export,
     stable_analysis_frame,
 )
 
@@ -114,6 +116,52 @@ class SearchWorkflowTests(unittest.TestCase):
         self.assertEqual(tuple(stable.columns), ANALYSIS_COLUMNS)
         self.assertTrue(board.empty)
         self.assertIn("total_score", board.columns)
+
+    def test_live_export_adds_traceability_without_mutating_results(self):
+        source = pd.DataFrame([{"title": "Card A", "total_score": 80}])
+        original = source.copy(deep=True)
+
+        exported = prepare_results_export(
+            source,
+            application_version="5.2.46",
+            completed_at="2026-08-13T12:00:00+00:00",
+            search_query="Shohei Ohtani",
+        )
+
+        pd.testing.assert_frame_equal(source, original)
+        self.assertEqual(
+            tuple(exported.columns[:len(EXPORT_TRACE_COLUMNS)]),
+            EXPORT_TRACE_COLUMNS,
+        )
+        self.assertEqual(exported.loc[0, "search_query"], "Shohei Ohtani")
+        self.assertEqual(exported.loc[0, "application_version"], "5.2.46")
+        self.assertEqual(
+            exported.loc[0, "search_completed_at"],
+            "2026-08-13T12:00:00+00:00",
+        )
+
+    def test_daily_export_preserves_each_rows_search_query(self):
+        source = pd.DataFrame(
+            [
+                {"title": "Card A", "search_query": "Shohei Ohtani"},
+                {"title": "Card B", "search_query": "Aaron Judge"},
+            ]
+        )
+
+        exported = prepare_results_export(
+            source,
+            application_version="5.2.46",
+            completed_at="2026-08-13T12:00:00+00:00",
+        )
+
+        self.assertEqual(
+            exported["search_query"].tolist(),
+            ["Shohei Ohtani", "Aaron Judge"],
+        )
+        self.assertEqual(
+            exported["application_version"].tolist(),
+            ["5.2.46", "5.2.46"],
+        )
 
     def test_beginning_new_run_clears_stale_results_and_outcome(self):
         old_results = scored_frame("Stale Card")
